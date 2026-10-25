@@ -2794,9 +2794,12 @@ export class CanvasView implements ScrollHost, InputHost {
 		let open = (n: number, alpha: number) => {
 			if (seen.has(n) || lines.covered(n) || alpha <= 0) return
 			seen.add(n)
-			let row = this.gutterRow(n).row
-			if (row >= first && row <= last)
-				pushGlyph(this.dynGlyphs, markX(n), rowY(row) + (lh - s / dpr) / 2, marker(true), fadeColor(color, alpha))
+			let row = this.gutterRow(n).row, tint = fadeColor(color, alpha)
+			// A tint whose alpha rounds to 0 would mark a color glyph: the
+			// shader would draw the mask itself, a white flash at the end of
+			// a fade (quickly hovering and leaving the gutter).
+			if (row >= first && row <= last && (tint >>> 24))
+				pushGlyph(this.dynGlyphs, markX(n), rowY(row) + (lh - s / dpr) / 2, marker(true), tint)
 		}
 		if (hoverAlpha > 0) {
 			// Every foldable visual line in the window.

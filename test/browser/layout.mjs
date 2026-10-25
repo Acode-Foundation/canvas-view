@@ -1109,6 +1109,36 @@ async function open(query) {
 	let falling = fadeOut.seen.every((a, i) => i == 0 || a <= fadeOut.seen[i - 1])
 	check("fold markers: and fades out when the cursor leaves", falling && fadeOut.seen.some(a => a > 0 && a < 200) &&
 		fadeOut.seen[fadeOut.seen.length - 1] == 0 && !fadeOut.fading, JSON.stringify(fadeOut))
+	// Quickly hovering the gutter and leaving it reverses the fade at a
+	// low alpha. A marker whose tint rounds to alpha 0 must not be drawn:
+	// a zero tint marks a color glyph, so the shader drew the mask itself
+	// (a white flash on dark themes).
+	let flash = await page.evaluate(async () => {
+		let r = view.scrollDOM.getBoundingClientRect(), frames = 0, zero = 0
+		let move = x => view.scrollDOM.dispatchEvent(new PointerEvent("pointermove",
+			{clientX: r.left + x, clientY: r.top + 200, pointerType: "mouse", bubbles: true}))
+		let watch = true
+		let loop = () => {
+			if (!watch) return
+			frames++
+			let b = view.dynGlyphs
+			for (let i = 0; i < b.count; i++) {
+				let x = b.f32[i * b.stride], c = b.u32[i * b.stride + 4]
+				if (x >= view.gutterRight && x < view.gutterWidth && c && !(c >>> 24)) zero++
+			}
+			requestAnimationFrame(loop)
+		}
+		requestAnimationFrame(loop)
+		for (let k = 0; k < 8; k++) {
+			move(view.gutterLeft + 5)
+			await new Promise(r => setTimeout(r, 15 + k * 10))
+			move(view.gutterWidth + 60)
+			await new Promise(r => setTimeout(r, 180))
+		}
+		watch = false
+		return {frames, zero}
+	})
+	check("fold markers: quick hovers never draw a marker with a zero tint", flash.frames > 20 && flash.zero == 0, JSON.stringify(flash))
 	check("fold markers: no page errors", !t.errors.length, t.errors.join("; "))
 	await page.close()
 }

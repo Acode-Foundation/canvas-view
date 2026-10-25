@@ -11,8 +11,8 @@ CodeMirror code works unchanged. It was built for
 [Acode](https://github.com/Acode-Foundation/Acode), the Android code
 editor, and is usable as a standalone library.
 
-> **Experimental.** It edits real code on phones, but it isn't on npm
-> yet and the API may still change.
+> **Experimental.** It edits real code on phones, but the API may still
+> change.
 
 ## Why
 
@@ -44,26 +44,20 @@ device:
 
 ## Install
 
-Not on npm yet. Build from source:
-
 ```sh
-git clone https://github.com/Acode-Foundation/canvas-view
-cd canvas-view
-bun install
-bun run build
+npm install @acode.app/canvas-view @codemirror/state @codemirror/view @codemirror/language
 ```
 
-Then depend on the checkout (`"@acode/canvas-view": "link:../canvas-view"`
-with bun, `"file:../canvas-view"` with npm). Your app must end up with a
-single copy each of `@codemirror/state`, `@codemirror/view`,
-`@codemirror/language` and `@lezer/common` (1.5.4 or later).
+Your app must end up with a single copy each of `@codemirror/state`,
+`@codemirror/view`, `@codemirror/language` and `@lezer/common` (1.5.4 or
+later), as CodeMirror requires.
 
 ## Usage
 
 ```ts
 import {EditorState} from "@codemirror/state"
 import {javascript} from "@codemirror/lang-javascript"
-import {CanvasView, darkTheme} from "@acode/canvas-view"
+import {CanvasView, darkTheme} from "@acode.app/canvas-view"
 
 const view = new CanvasView({
 	parent: document.querySelector("#editor")!,

@@ -1,5 +1,5 @@
 {
-  "name": "@acode/canvas-view",
+  "name": "@acode.app/canvas-view",
   "version": "0.0.1",
   "description": "A GPU-rendered (WebGL2/WebGPU) code editor view built on CodeMirror's state and language packages",
   "keywords": [

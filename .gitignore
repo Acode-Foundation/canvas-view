@@ -1,0 +1,11 @@
+node_modules
+dist
+demo-dist
+bench/results/*.json
+.DS_Store
+
+# Local agent notes and tooling (not published)
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.local.md
+.claude/

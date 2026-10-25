@@ -42,6 +42,14 @@ export interface CanvasViewConfig {
 	/// the scroller, content or lines; one on the editor itself doesn't
 	/// reach them).
 	font?: Partial<FontSpec>
+	/// Draw the font's ligatures (`=>`, `!==`, `<=`...) and contextual
+	/// alternates, as the browser does in DOM text. By default this
+	/// follows the editor's CSS like CodeMirror's text does: on, unless
+	/// `font-variant-ligatures` is `none` or `no-contextual`, or
+	/// `font-feature-settings` turns `calt` off, on `.cm-content` or
+	/// `.cm-line` (e.g. through `EditorView.theme`). Fonts without
+	/// ligatures cost nothing either way.
+	fontLigatures?: boolean
 	theme?: CanvasThemeSpec
 	/// Which GPU API to use. "auto" uses WebGL2, the most widely
 	/// available; "webgpu" falls back to WebGL2 when unavailable.
@@ -1426,11 +1434,13 @@ export class CanvasView implements ScrollHost, InputHost {
 	/// Change options that can be updated live (`scrollSpeed`,
 	/// `scrollPastEnd`, `horizontalScrollPastEnd`, `foldMarkers`,
 	/// `wrapIndent`, `lineWrapping`, `indentGuides`, `lineNumbers`,
-	/// `cursorBlinkRate`, `stickyScroll`...).
+	/// `cursorBlinkRate`, `stickyScroll`, `fontLigatures`...).
 	reconfigure(options: Pick<CanvasViewConfig, "scrollSpeed" | "scrollPastEnd" | "horizontalScrollPastEnd" | "foldMarkers" |
 		"wrapIndent" | "lineWrapping" | "textDirection" | "indentGuides" | "lineNumbers" | "cursorBlinkRate" | "highlightActiveLine" | "cursorWidth" |
-		"placeholder" | "showWhitespace" | "onLineNumberClick" | "rainbowBrackets" | "gutterMarkers" | "readOnlyCursor" | "stickyScroll">) {
+		"placeholder" | "showWhitespace" | "onLineNumberClick" | "rainbowBrackets" | "gutterMarkers" | "readOnlyCursor" | "stickyScroll" |
+		"fontLigatures">) {
 		Object.assign(this.config, options)
+		if ("fontLigatures" in options) this.syncLigatures()
 		if ("readOnlyCursor" in options) this.syncWritable()
 		if ("lineNumbers" in options) {
 			this.lineNumbers = (options.lineNumbers ?? true) !== false
@@ -1903,6 +1913,17 @@ export class CanvasView implements ScrollHost, InputHost {
 		this.scheduleTreeSync()
 		if (animating) this.requestFrame()
 		if (!this.lines.identity && this.lines.dirty) this.scheduleIdleMeasure()
+		if (this.atlas.ligaturesWanted && !this.probeTimer) this.probeTimer = setTimeout(this.probeLigatures, 0)
+	}
+
+	private probeTimer: ReturnType<typeof setTimeout> | 0 = 0
+
+	/// Find out, in a task after the frame, whether the font has
+	/// ligatures (once per font and page; ~0.3ms at 1×). Lines were
+	/// drawn without them meanwhile; a font with them draws them again.
+	private probeLigatures = () => {
+		this.probeTimer = 0
+		if (!this.destroyed && this.atlas.probeLigatures()) this.requestFrame()
 	}
 
 	/// Share the syntax driver's tree with the state's language field,
@@ -2065,7 +2086,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		let emitted = 0
 		for (let attempt = 0; attempt < 2; attempt++) {
 			let generation = this.atlas.generation
-			let key = [this.atlas, generation, this.theme, this.metrics, this.gutterWidth, this.lineNumbers, this.relativeNumbers, this.tabSize, lines.wrap,
+			let key = [this.atlas, generation, this.atlas.ligatures, this.atlas.ligatureVersion, this.theme, this.metrics, this.gutterWidth, this.lineNumbers, this.relativeNumbers, this.tabSize, lines.wrap,
 				lines.bidiVersion,
 				this.indentUnit, this.config.indentGuides, this.whitespace, this.rainbowState]
 			this.scene.ensure(this.state.doc, this.syntax, first, last, wantFirst, wantLast, colFirst, colLast, firstRow, lastRow,
@@ -2908,7 +2929,7 @@ export class CanvasView implements ScrollHost, InputHost {
 			return
 		}
 		let cur = this.relativeNumbers ? this.state.doc.lineAt(this.state.selection.main.head).number : 0
-		let key = [headers.lines, this.state.doc, this.styles, this.atlas, this.atlas.generation, this.theme, this.metrics, this.gutterWidth,
+		let key = [headers.lines, this.state.doc, this.styles, this.atlas, this.atlas.generation, this.atlas.ligatures, this.atlas.ligatureVersion, this.theme, this.metrics, this.gutterWidth,
 			this.contentLeft, this.lineNumbers, cur, this.lines.version, this.rainbowState, this.syntax]
 		if (sameKey(key, st.key)) {
 			// Provisional colors: rebuild when better ones arrive.
@@ -3078,6 +3099,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		else if (this.fixedLineHeight != null) this.font.lineHeight = this.fixedLineHeight
 		this.metrics = measureFont(this.font, this.dpr, px ?? undefined)
 		this.atlas = new GlyphAtlas(this.metrics, this.backend?.maxTextureSize ?? 4096, this.theme.dark ? "#fff" : "#000")
+		this.atlas.ligatures = this.config.fontLigatures ?? this.ligatures
 		this.layouts?.clear()
 		this.lines?.reset()
 		this.resetStyles()
@@ -3153,6 +3175,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		let key = [this.state.facet(EditorView.styleModule), this.plugins.themeClasses]
 		if (!this.lineHeightUnread && sameKey(key, this.lineHeightKey)) return
 		this.lineHeightKey = key
+		this.syncLigatures()
 		let px = this.measureLineHeight()
 		if (px == null || px == this.metrics.lineHeight) return
 		this.measure()
@@ -3160,7 +3183,20 @@ export class CanvasView implements ScrollHost, InputHost {
 		this.requestFrame()
 	}
 
+	private ligatures = true
+
+	/// Follow the `fontLigatures` option or, without one, the editor's
+	/// CSS. The scene key includes the atlas's flag, so a change re-emits
+	/// the lines.
+	private syncLigatures() {
+		let on = this.ligatures = this.config.fontLigatures ?? this.classReader.ligatures() ?? this.ligatures
+		if (on == this.atlas.ligatures) return
+		this.atlas.ligatures = on
+		this.requestFrame()
+	}
+
 	private onFontsLoaded = () => {
+		GlyphAtlas.fontsChanged()
 		let before = this.metrics
 		let next = measureFont(this.font, this.dpr)
 		let lineHeight = this.measureLineHeight()
@@ -3276,6 +3312,7 @@ export class CanvasView implements ScrollHost, InputHost {
 	destroy() {
 		this.destroyed = true
 		if (this.prewarmTimer != null) clearTimeout(this.prewarmTimer)
+		if (this.probeTimer) clearTimeout(this.probeTimer)
 		if (this.blinkTimer != null) clearTimeout(this.blinkTimer)
 		if (this.idleTimer != null) clearTimeout(this.idleTimer)
 		if (this.recoveryTimer != null) clearTimeout(this.recoveryTimer)

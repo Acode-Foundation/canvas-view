@@ -1,7 +1,7 @@
 import {type ChangeDesc, MapMode, type Text} from "@codemirror/state"
-import type {FontVariant, GlyphAtlas, GlyphEntry} from "../core/atlas"
+import {type FontVariant, type GlyphAtlas, type GlyphEntry, LIGATURE_CHARS, MAX_LIGATURE} from "../core/atlas"
 import {type PackedColor, parseColor} from "../core/color"
-import {GLYPH_STRIDE, InstanceBuffer, pushGlyph, pushRect, RECT_STRIDE} from "../core/instances"
+import {GLYPH_STRIDE, InstanceBuffer, pushGlyph, pushGlyphPart, pushRect, RECT_STRIDE} from "../core/instances"
 import {type CanvasWidgetSpec, type DecoState, type ResolvedMark, resolveMark} from "./decorations"
 import {mirrorChar} from "./bidi"
 import {type Cluster, ClusterKind, type LineLayouts} from "./layout"
@@ -584,6 +584,10 @@ export class Scene {
 	}
 }
 
+// Styles of the characters of the ligature run being emitted.
+const runColors = new Uint32Array(MAX_LIGATURE)
+const runVariants = new Uint8Array(MAX_LIGATURE)
+
 /// Emits one visual line's glyphs and rects: tracks the current row
 /// (wrapping), syntax and mark styles, and decoration rect runs.
 class Emitter {
@@ -696,6 +700,10 @@ class Emitter {
 			return Math.min(rEnd, marks ? mEnd - lineStart : Infinity)
 		}
 		let boundary = -1
+		// Runs of punctuation are shaped as a whole where the font has
+		// ligatures, as in DOM text: across tokens, cut by color only
+		// when drawn. Lines with bidi text keep per-character glyphs.
+		let lig = !bidi && atlas.ligatures && atlas.ligaturesOf(0) ? LIGATURE_CHARS : null, plainTo = -1
 		if (!clusters) {
 			// Printable ASCII: one cell per char, column == offset.
 			let start = Math.max(from, Math.ceil(colFrom - colShift)), end = Math.min(to, Math.ceil(colTo - colShift))
@@ -713,6 +721,33 @@ class Emitter {
 					bi += 2
 				}
 				let code = text.charCodeAt(i)
+				if (lig && lig[code] && i >= plainTo) {
+					// The run ends at the row's end (wrapping) and the window's.
+					let limit = Math.min(end, this.next - colShift), j = i + 1
+					while (j < limit && lig[text.charCodeAt(j)]) j++
+					if (j - i > MAX_LIGATURE) {
+						plainTo = j
+					} else if (j - i > 1) {
+						runColors[0] = color
+						runVariants[0] = st.variant
+						for (let k = i + 1; k < j; k++) {
+							if (k >= boundary) {
+								boundary = styleAt(k)
+								this.decoRuns(k + colShift, cls, mark)
+							}
+							let s = styles[style], c = s.color
+							if (rainbow && brackets![bi] == k) {
+								c = rainbow[brackets![bi + 1]]
+								bi += 2
+							}
+							runColors[k - i] = c
+							runVariants[k - i] = s.variant
+						}
+						this.ligatureRun(text, i, j, col)
+						i = j - 1
+						continue
+					}
+				}
 				if (bidi && mirrorChar(code) && this.rtlAt(col)) code = mirrorChar(code)
 				let g = atlas.asciiGlyph(st.variant, code)
 				if (g.w) pushGlyph(glyphs, (bidi ? this.xOf(col, 1) : col - this.rs + this.rx) * cw + g.ox, this.y + g.oy, g, color)
@@ -720,7 +755,8 @@ class Emitter {
 			this.endCol = Math.max(this.endCol, end + colShift)
 			return
 		}
-		for (let c of clusters) {
+		for (let ci = 0; ci < clusters.length; ci++) {
+			let c = clusters[ci]
 			if (c.to <= from) continue
 			if (c.from >= to) break
 			let col = c.col + colShift
@@ -739,12 +775,80 @@ class Emitter {
 				if (brackets![bi] == c.from) color = rainbow[brackets![bi + 1]]
 			}
 			let ch = c.text.length == 1 ? c.text.charCodeAt(0) : -1
+			if (lig && ch >= 0 && ch < 128 && lig[ch] && c.kind == ClusterKind.Text && ci >= plainTo) {
+				// Same as above, over single-character clusters (lines with
+				// tabs or non-ASCII text).
+				let limit = Math.min(colTo, this.next), cj = ci + 1
+				for (let d; cj < clusters.length && (d = clusters[cj]).from < to && d.kind == ClusterKind.Text &&
+					d.text.length == 1 && d.text.charCodeAt(0) < 128 && lig[d.text.charCodeAt(0)] && d.col + colShift < limit; cj++) {}
+				let n = cj - ci
+				if (n > MAX_LIGATURE) {
+					plainTo = cj
+				} else if (n > 1) {
+					runColors[0] = color
+					runVariants[0] = v
+					for (let k = 1; k < n; k++) {
+						let d = clusters[ci + k]
+						if (d.from >= boundary) {
+							boundary = styleAt(d.from)
+							this.decoRuns(d.col + colShift, cls, mark)
+						}
+						let s = styles[style], dc = s.color
+						if (rainbow) {
+							while (bi < brackets!.length && brackets![bi] < d.from) bi += 2
+							if (brackets![bi] == d.from) dc = rainbow[brackets![bi + 1]]
+						}
+						runColors[k] = dc
+						runVariants[k] = s.variant
+					}
+					this.endCol = Math.max(this.endCol, col + n)
+					this.ligatureRun(text, c.from, c.from + n, col)
+					ci = cj - 1
+					continue
+				}
+			}
 			// Rule L4: brackets drawn right-to-left are mirrored.
 			if (bidi && ch >= 0 && mirrorChar(ch) && this.rtlAt(col)) ch = mirrorChar(ch)
 			let g = c.kind == ClusterKind.Shaped ? atlas.shapedGlyph(v, c.text, c.cells)
 				: ch >= 0 && ch < 128 ? atlas.asciiGlyph(v, ch)
 				: atlas.glyph(v, ch >= 0 ? String.fromCharCode(ch) : c.text)
 			if (g.w) pushGlyph(glyphs, (bidi ? this.xOf(col, c.cells) : col - this.rs + this.rx) * cw + g.ox, this.y + g.oy, g, color)
+		}
+	}
+
+	/// Draw the run of ligature characters `text[from..to]`, starting at
+	/// column `col` on the current row, with their styles in
+	/// `runColors`/`runVariants`. Each part in one font variant is one
+	/// glyph where the font has a ligature for it, cut at character
+	/// boundaries where colors change (the browser paints a ligature
+	/// spanning tokens of different colors the same way), and drawn
+	/// character by character otherwise.
+	private ligatureRun(text: string, from: number, to: number, col: number) {
+		let atlas = this.host.atlas, glyphs = this.glyphs, cw = this.cw, y = this.y
+		let x0 = (col - this.rs + this.rx) * cw
+		for (let a = from; a < to;) {
+			let v = runVariants[a - from] as FontVariant, b = a + 1
+			while (b < to && runVariants[b - from] == v) b++
+			let g = b - a > 1 ? atlas.ligature(v, text, a, b) : null
+			if (!g) {
+				for (let k = a; k < b; k++) {
+					let cg = atlas.asciiGlyph(v, text.charCodeAt(k))
+					if (cg.w) pushGlyph(glyphs, x0 + (k - from) * cw + cg.ox, y + cg.oy, cg, runColors[k - from])
+				}
+			} else if (g.w) {
+				let gx = x0 + (a - from) * cw + g.ox, dpr = this.host.dpr
+				for (let s = a; s < b;) {
+					let color = runColors[s - from], e = s + 1
+					while (e < b && runColors[e - from] == color) e++
+					// Texels of characters s..e: from cell edge to cell edge,
+					// the ends taking the ink outside the run.
+					let t0 = s == a ? 0 : Math.max(0, Math.min(g.w, Math.round(((s - a) * cw - g.ox) * dpr)))
+					let t1 = e == b ? g.w : Math.max(0, Math.min(g.w, Math.round(((e - a) * cw - g.ox) * dpr)))
+					if (t1 > t0) pushGlyphPart(glyphs, gx + t0 / dpr, y + g.oy, g, t0, t1 - t0, color)
+					s = e
+				}
+			}
+			a = b
 		}
 	}
 

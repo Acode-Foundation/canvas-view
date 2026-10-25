@@ -96,6 +96,16 @@ export class ClassStyleReader {
 		return height > 0 ? height : null
 	}
 
+	/// Whether the editor's CSS leaves ligatures on in `.cm-line` text.
+	/// Coding fonts draw them as contextual alternates (`calt`), so
+	/// `no-contextual` or `"calt" 0` turns them off as well as `none`.
+	/// Null when the editor isn't in the document.
+	ligatures(): boolean | null {
+		if (!this.connect()) return null
+		let style = getComputedStyle(this.probe!), variant = style.fontVariantLigatures
+		return !(variant == "none" || variant.includes("no-contextual") || /"calt" 0\b/.test(style.fontFeatureSettings))
+	}
+
 	destroy() {
 		;(this.line?.parentNode as HTMLElement | null)?.remove()
 		this.line = this.token = this.probe = null

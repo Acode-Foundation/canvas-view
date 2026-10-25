@@ -4,6 +4,7 @@
 // others reload the page.
 import {Compartment, EditorState} from "@codemirror/state"
 import type {CanvasView} from "../src/index"
+import firaCodeUrl from "./fonts/FiraCode.ttf?url"
 
 /// Read-only is state-level: toggled through this compartment.
 export const readOnlyCompartment = new Compartment()
@@ -25,6 +26,24 @@ interface Section {
 }
 
 const onOff: Choice[] = [["1", "On"], ["0", "Off"]]
+
+/// The demo's fonts: the default monospace stack, or Fira Code (the
+/// ligature font Acode ships), loaded when first chosen.
+export const systemFonts = "ui-monospace, 'Roboto Mono', 'Droid Sans Mono', Menlo, Consolas, monospace"
+let firaCode: FontFace | null = null
+export function fontFamily(name: string) {
+	if (name != "fira") return systemFonts
+	if (!firaCode) {
+		firaCode = new FontFace("Fira Code", `url(${firaCodeUrl})`)
+		document.fonts.add(firaCode)
+		firaCode.load()
+	}
+	return "'Fira Code', monospace"
+}
+
+export function ligatureOption(value: string) {
+	return value == "auto" ? undefined : value == "1"
+}
 
 export const sections: Section[] = [
 	{title: "Document", settings: [
@@ -72,6 +91,10 @@ export const sections: Section[] = [
 			live: (v, x) => v.setFont({size: +x})},
 		{key: "lineHeight", label: "Line height", def: "1.5", choices: [["1.3", "1.3"], ["1.5", "1.5"], ["1.7", "1.7"]],
 			live: (v, x) => v.setFont({lineHeight: +x})},
+		{key: "font", label: "Font", def: "system", choices: [["system", "System monospace"], ["fira", "Fira Code (ligatures)"]],
+			live: (v, x) => v.setFont({family: fontFamily(x)})},
+		{key: "ligatures", label: "Font ligatures (with a ligature font, e.g. Fira Code)", def: "auto", choices: [["auto", "Follow the CSS (on)"], ["1", "On"], ["0", "Off"]],
+			live: (v, x) => v.reconfigure({fontLigatures: ligatureOption(x)})},
 		{key: "theme", label: "Theme", def: "dark", choices: [["dark", "Dark"], ["light", "Light"]]},
 		{key: "cursorWidth", label: "Cursor width", def: "2", choices: [["1", "1px"], ["2", "2px"], ["3", "3px"]],
 			live: (v, x) => v.reconfigure({cursorWidth: +x})},

@@ -50,7 +50,7 @@ a 412×860 phone at DPR 2.625 with touch and throttle the CPU through CDP.
 `--device` variants drive a USB-connected phone's WebView over DevTools
 (see the comment at the top of each script).
 
-Demo URL params: `?kind=js|html|unicode|rtl|longline|deep&lines=N&backend=webgl2|webgpu&input=auto|editcontext|textarea&bare=1&wrap=1&ext=full|basic&sticky=0|1|3|5`.
+Demo URL params: `?kind=js|html|unicode|rtl|longline|deep&lines=N&backend=webgl2|webgpu&input=auto|editcontext|textarea&bare=1&wrap=1&ext=full|basic&sticky=0|1|3|5&font=system|fira&ligatures=auto|1|0`.
 The ⚙ panel (`demo/settings.ts`) edits every option. In the page,
 `window.view` is the `CanvasView` (`view.debug`, `view.stats`,
 `view.fling(vx, vy)`) and `window.cmApi` exposes CodeMirror helpers for
@@ -176,6 +176,12 @@ nothing, emits nothing and runs no layout.
   row. Lines in a left-to-right paragraph without RTL characters have
   `vl.bidi == null` and pay nothing. Cursor motion is visual, like
   CodeMirror's.
+- **Ligatures** (`fontLigatures`, following the CSS by default, like DOM
+  text): runs of punctuation are drawn as one atlas glyph shaped by the
+  browser when the font draws them differently from their characters
+  (found once per font by pixel comparison, after the frame). Columns
+  don't change; a run spanning colors is cut at character boundaries.
+  Fonts without ligatures pay nothing.
 
 ### Lines, wrapping, folding
 

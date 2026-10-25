@@ -11,8 +11,7 @@ CodeMirror code works unchanged. It was built for
 [Acode](https://github.com/Acode-Foundation/Acode), the Android code
 editor, and is usable as a standalone library.
 
-> **Experimental.** It edits real code on phones, but the API may still
-> change.
+> **Experimental.**
 
 ## Why
 
@@ -112,6 +111,7 @@ run against it unchanged.
 | `state` / `doc` / `extensions` | | The `EditorState`, or a doc and extensions to make one |
 | `theme` | `darkTheme` | A `CanvasThemeSpec` (see [Theming](#theming)) |
 | `font` | monospace, 14px | `{family, size, lineHeight}`. Without `lineHeight`, rows are as tall as CodeMirror's (`.cm-line` CSS line height) |
+| `fontLigatures` | from the CSS (on) | Draw the font's ligatures (`=>`, `!==`) like DOM text; off with `false`, or with `font-variant-ligatures: none` in the editor's CSS |
 | `backend` | `"auto"` (WebGL2) | `"webgl2"` or `"webgpu"` (falls back to WebGL2) |
 | `lineNumbers` | `true` | `false` or `"relative"` |
 | `onLineNumberClick` | fold toggle | `(line, event, view) => boolean`; return true to handle it |

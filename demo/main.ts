@@ -12,7 +12,7 @@ import {crosshairCursor, Decoration, type DecorationSet, dropCursor, EditorView,
 	WidgetType} from "@codemirror/view"
 import {CanvasView, darkTheme, lightTheme} from "../src/index"
 import {type FixtureKind, makeFixture} from "./fixtures"
-import {guideOption, mountSettings, readOnlyCompartment, setting, stickyOption, whitespaceOption} from "./settings"
+import {fontFamily, guideOption, ligatureOption, mountSettings, readOnlyCompartment, setting, stickyOption, whitespaceOption} from "./settings"
 
 let params = new URLSearchParams(location.search)
 let get = (key: string) => setting(params, key)!
@@ -330,7 +330,8 @@ let viewStart = performance.now()
 let view = new CanvasView({
 	parent: document.getElementById("editor")!, state, backend, input,
 	theme: light ? lightTheme : darkTheme,
-	font: {size: +get("fontSize"), lineHeight: +get("lineHeight")},
+	font: {family: fontFamily(get("font")), size: +get("fontSize"), lineHeight: +get("lineHeight")},
+	fontLigatures: ligatureOption(get("ligatures")),
 	lineNumbers: get("lineNumbers") == "relative" ? "relative" : get("lineNumbers") == "1",
 	highlightActiveLine: get("activeLine") == "1",
 	gutterMarkers: get("markers") as any,

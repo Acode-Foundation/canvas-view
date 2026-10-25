@@ -95,3 +95,18 @@ export function pushGlyph(buf: InstanceBuffer, x: number, y: number,
 	buf.u16[h + 3] = g.h
 	buf.u32[at + 4] = g.colored ? 0 : color
 }
+
+/// Texels `du..du + w` of a glyph's width, drawn at x (where that
+/// part starts): a ligature cut where its characters' colors change.
+export function pushGlyphPart(buf: InstanceBuffer, x: number, y: number,
+	g: {u: number, v: number, w: number, h: number, colored: boolean}, du: number, w: number, color: PackedColor) {
+	let at = buf.alloc(1)
+	buf.f32[at] = x
+	buf.f32[at + 1] = y
+	let h = (at + 2) * 2
+	buf.u16[h] = g.u + du
+	buf.u16[h + 1] = g.v
+	buf.u16[h + 2] = w
+	buf.u16[h + 3] = g.h
+	buf.u32[at + 4] = g.colored ? 0 : color
+}

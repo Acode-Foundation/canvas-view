@@ -86,6 +86,7 @@ src/
     sticky.ts      sticky scroll scopes and header slots
     input.ts       EditContext input (+ textarea fallback), keymaps, clipboard
     touchselect.ts touch selection: taps, long press, handles, menu/haptic hooks
+    magnifier.ts   loupe over the text under a finger dragging a selection
     mouse.ts       mouse selection, rectangular selection, text drag-and-drop
     atomic.ts      EditorView.atomicRanges for cursors and pointer selections
     scroll.ts      touch drag, fling, wheel
@@ -245,6 +246,14 @@ installed.
   keeps it, and the next flick adds its velocity.
 - Touch selection mechanics (handles, long press, double/triple tap) are
   the library's; the **menu is the consumer's**, driven by `onMenu`.
+- A **magnifier** (`touchSelection.magnifier`, default on) shows the text
+  under a finger dragging a handle or a long-press selection, like
+  sora-editor's: a small 2D canvas copying the region from the GPU
+  canvas right after each frame (only then can a GPU canvas be read).
+  It hides in the top and bottom auto-scroll zones.
+- A touch selection (handles shown) draws no cursor, like sora-editor
+  and native Android; mouse and keyboard selections keep CodeMirror's
+  cursor at the head.
 - Mouse selection follows CodeMirror's `MouseSelection`, including
   `mouseSelectionStyle` providers; text drag-and-drop is native HTML DnD.
 

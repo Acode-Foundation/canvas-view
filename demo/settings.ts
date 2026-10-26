@@ -106,7 +106,8 @@ export const sections: Section[] = [
 			live: (v, x) => v.dispatch({effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(x == "1"))})},
 		{key: "ext", label: "CodeMirror plugins", def: "full", choices: [["full", "Search, autocomplete, lint, hover, inlay hints"], ["basic", "None (state only)"]]},
 		{key: "input", label: "Text input", def: "auto", choices: [["auto", "Auto"], ["editcontext", "EditContext"], ["textarea", "Textarea"]]},
-		{key: "handles", label: "Selection handles", def: "20", choices: [["0", "Off"], ["16", "Small"], ["20", "Normal"], ["26", "Large"]]}
+		{key: "handles", label: "Selection handles", def: "20", choices: [["0", "Off"], ["16", "Small"], ["20", "Normal"], ["26", "Large"]]},
+		{key: "magnifier", label: "Magnifier", def: "1", choices: onOff}
 	]},
 	{title: "Rendering", settings: [
 		{key: "backend", label: "GPU backend", def: "webgl2", choices: [["webgl2", "WebGL2"], ["webgpu", "WebGPU"]]}

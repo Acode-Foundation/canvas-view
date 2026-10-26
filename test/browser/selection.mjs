@@ -119,6 +119,11 @@ await frames()
 s = await sel()
 check("double tap selects the word", s.text == "cached", JSON.stringify(s))
 check("selection handles shown", s.mode == "selection")
+const cursorCount = () => page.evaluate(async () => {
+	await new Promise(r => requestAnimationFrame(r))
+	return view.cursorRects.count
+})
+check("touch selection draws no cursor (like sora-editor)", await cursorCount() == 0)
 check("start and end handles are drawn", await handlePixels("start") > 0.2 && await handlePixels("end") > 0.2)
 m = await menu()
 check("menu shows for the selection", m.shown && m.items.includes("Copy") && m.items.includes("Cut"), JSON.stringify(m))
@@ -139,6 +144,127 @@ let endR = await handleRect("end")
 await drag([st, {x: st.x + 4, y: st.y}, {x: endR.left + 1, y: st.y}])
 s = await sel()
 check("handle drags never collapse the selection", s.from < s.to, JSON.stringify(s))
+
+// A magnifier shows the text under the finger while a handle is
+// dragged, above the dragged position's row, and goes on release.
+{
+	let magState = () => page.evaluate(() => {
+		let m = document.querySelector(".cm-canvasMagnifier")
+		if (!m || m.style.display == "none") return {shown: false}
+		let r = m.getBoundingClientRect(), cx = m.getContext("2d")
+		let d = cx.getImageData(0, 0, m.width, m.height).data
+		// Pixels that aren't the background: the magnified text.
+		let bg = [d[0], d[1], d[2]], ink = 0
+		for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - bg[0]) + Math.abs(d[i + 1] - bg[1]) + Math.abs(d[i + 2] - bg[2]) > 60) ink++
+		let head = view.state.selection.main.head, c = view.coordsAtPos(head, -1)
+		return {shown: true, top: r.top, bottom: r.bottom, left: r.left, right: r.right, ink: ink / (d.length / 4),
+			row: {top: c.top, bottom: c.bottom, x: c.left}, scale: m.width / r.width}
+	})
+	let e = await handleRect("end")
+	await touch("touchStart", e.x, e.y)
+	await sleep(16)
+	await touch("touchMove", e.x - 3, e.y)
+	await sleep(16)
+	await touch("touchMove", e.x - 25, e.y)
+	await frames()
+	let mag = await magState()
+	await touch("touchEnd")
+	await frames()
+	check("magnifier shows while a handle is dragged", mag.shown, JSON.stringify(mag))
+	check("magnifier sits above the dragged row", mag.shown && mag.bottom <= mag.row.top + 0.5 && mag.left <= mag.row.x && mag.right >= mag.row.x,
+		JSON.stringify(mag))
+	check("magnifier shows the text", mag.shown && mag.ink > 0.02 && mag.scale > 1, JSON.stringify(mag))
+	check("magnifier hides on release", !(await magState()).shown)
+
+	// Hidden while the finger is in an edge's auto-scroll zone (like
+	// sora-editor's), back once it leaves it.
+	e = await handleRect("end")
+	let bottom = await page.evaluate(() => view.scrollDOM.getBoundingClientRect().bottom)
+	let ex = e.x - 25
+	await touch("touchStart", e.x, e.y)
+	await sleep(16)
+	await touch("touchMove", ex, e.y + 6)
+	await sleep(16)
+	await touch("touchMove", ex, bottom - 4)
+	await frames()
+	let inEdge = await magState()
+	let scrolled = await page.evaluate(() => view.scrolling || view.scrollTop > 0)
+	await touch("touchMove", ex, (e.y + bottom) / 2)
+	await frames()
+	let outOfEdge = await magState()
+	await touch("touchEnd")
+	await frames()
+	check("magnifier hides while auto-scrolling at the bottom edge", scrolled && !inEdge.shown, JSON.stringify({scrolled, inEdge}))
+	check("magnifier comes back outside the edge zone", outOfEdge.shown, JSON.stringify(outOfEdge))
+
+	// A horizontal auto-scroll (the right edge) keeps it: the row stays.
+	await page.evaluate(() => { view.scrollLeft = 0 })
+	e = await handleRect("end")
+	let right = await page.evaluate(() => view.scrollDOM.getBoundingClientRect().right)
+	await touch("touchStart", e.x, e.y)
+	await sleep(16)
+	await touch("touchMove", e.x + 6, e.y)
+	await sleep(16)
+	await touch("touchMove", right - 4, e.y)
+	await sleep(100)
+	await frames()
+	let sideways = await magState()
+	let movedLeft = await page.evaluate(() => view.scrollLeft)
+	await touch("touchEnd")
+	await frames()
+	check("magnifier stays while auto-scrolling sideways", movedLeft > 0 && sideways.shown && sideways.ink > 0.02,
+		JSON.stringify({movedLeft, sideways}))
+	await page.evaluate(() => { view.scrollLeft = 0 })
+
+	// A long press then drag (extending the selection) magnifies too.
+	let lp = await at(await posOf(15, "cache"))
+	await touch("touchStart", lp.x, lp.y)
+	await sleep(500)
+	await touch("touchMove", lp.x + 8, lp.y)
+	await sleep(16)
+	await touch("touchMove", lp.x + 40, lp.y)
+	await frames()
+	let extend = await magState()
+	await touch("touchEnd")
+	await frames()
+	check("magnifier shows while extending a long press", extend.shown && extend.ink > 0.02, JSON.stringify(extend))
+
+	// A tap or a double tap never shows it, and `magnifier: false` turns it off.
+	let quiet = await at(await posOf(19, "retrying"))
+	await tap(quiet.x, quiet.y)
+	await tap(quiet.x, quiet.y)
+	await frames()
+	check("no magnifier for taps", !(await magState()).shown)
+	await page.evaluate(() => { view.touchSelection.config.magnifier = false })
+	e = await handleRect("end")
+	await touch("touchStart", e.x, e.y)
+	await sleep(16)
+	await touch("touchMove", e.x + 3, e.y)
+	await sleep(16)
+	await touch("touchMove", e.x + 25, e.y)
+	await frames()
+	let off = await magState()
+	await touch("touchEnd")
+	await frames()
+	await page.evaluate(() => { delete view.touchSelection.config.magnifier })
+	check("magnifier: false turns it off", !off.shown)
+}
+
+// A keyboard selection keeps CodeMirror's cursor at its head.
+{
+	let k = await at(await posOf(14, "result"))
+	await tap(k.x, k.y)
+	await frames()
+	let caret = await cursorCount()
+	await page.keyboard.down("Shift")
+	await page.keyboard.press("ArrowRight")
+	await page.keyboard.press("ArrowRight")
+	await page.keyboard.up("Shift")
+	await frames()
+	let kb = await sel()
+	check("a tapped caret draws the cursor", caret == 1)
+	check("keyboard selection draws the cursor", kb.from < kb.to && kb.mode != "selection" && await cursorCount() == 1, JSON.stringify(kb))
+}
 
 // Triple tap selects the line.
 pt = await at(await posOf(14, "result"))

@@ -1,6 +1,7 @@
 import {CharCategory, EditorSelection, EditorState, findClusterBreak, type Transaction} from "@codemirror/state"
 import {EditorView} from "@codemirror/view"
 import {clipboardFilter} from "./input"
+import type {MagnifierConfig} from "./magnifier"
 
 export type HandleKind = "cursor" | "start" | "end"
 
@@ -37,6 +38,12 @@ export interface TouchSelectionConfig {
 	/// Override the range a long-press or double-tap selects (e.g. a CSS
 	/// color literal). Return null for the default word range.
 	wordRange?: (state: EditorState, pos: number) => {from: number, to: number} | null
+	/// Show a magnifier over the text while a finger drags a handle,
+	/// extends a long-press selection or moves selected text, like
+	/// Android's text fields (the finger hides that text). It hides
+	/// while the finger is in the top or bottom auto-scroll zone.
+	/// Default true.
+	magnifier?: boolean | MagnifierConfig
 }
 
 /// What touch selection needs from the view.
@@ -91,6 +98,9 @@ export class TouchSelection {
 	private autoscrollFrame = 0
 	/// Set while dispatching our own selection changes.
 	private own = false
+	/// The center of what the magnifier shows during a drag, in CSS px
+	/// in the surface.
+	magnifierPoint: {x: number, y: number} | null = null
 
 	constructor(private host: TouchSelectionHost, private config: TouchSelectionConfig = {}) {
 		this.handleSize = config.handleSize ?? 20
@@ -345,10 +355,12 @@ export class TouchSelection {
 		let {pos, side} = this.host.posAndSideAtClient(d.x + d.dx, d.y + d.dy)
 		if (d.kind == "text") {
 			this.host.setDropPos(pos)
+			this.magnify()
 			return
 		}
 		if (d.kind == "cursor") {
 			this.select(pos, pos, side)
+			this.magnify()
 			return
 		}
 		let doc = this.host.state.doc, fixed = d.fixed
@@ -359,6 +371,7 @@ export class TouchSelection {
 			else this.select(d.fixed, Math.max(pos, d.fixedTo))
 			if (this.host.state.selection.main.empty) this.setMode("cursor")
 			else this.setMode("selection")
+			this.magnify()
 			return
 		}
 		// Selections from a handle drag never collapse to a caret.
@@ -369,6 +382,38 @@ export class TouchSelection {
 				: (pos > line.from ? line.from + findClusterBreak(line.text, pos - line.from, false) : Math.max(0, pos - 1))
 		}
 		this.select(fixed, pos)
+		this.magnify()
+	}
+
+	/// The magnifier follows the finger both ways, like sora-editor's:
+	/// on a handle, centered on the top of the row it drags; on the text
+	/// (a long-press drag), a row above the finger.
+	private magnify() {
+		if (this.config.magnifier === false || !this.drag?.moved) return
+		let d = this.drag, rect = this.host.surface.getBoundingClientRect(), lh = this.host.lineHeight
+		// Scrolling rows under it would only flicker; a horizontal
+		// auto-scroll keeps the row, and the magnifier stays readable.
+		if (this.edgeDelta(d.x, d.y, rect).dy) {
+			this.endMagnifier()
+			return
+		}
+		let y = d.kind == "extend" || d.kind == "text" ? d.y - lh : d.y + d.dy - lh / 2
+		this.magnifierPoint = {x: d.x + d.dx - rect.left, y: y - rect.top}
+		this.host.requestFrame()
+	}
+
+	private endMagnifier() {
+		if (!this.magnifierPoint) return
+		this.magnifierPoint = null
+		this.host.requestFrame()
+	}
+
+	/// How far a point is into the edges' auto-scroll zones (0 outside).
+	private edgeDelta(x: number, y: number, rect: DOMRect) {
+		let zone = this.host.lineHeight * AUTOSCROLL_ZONE
+		let dy = y < rect.top + zone ? -(rect.top + zone - y) : y > rect.bottom - zone ? y - (rect.bottom - zone) : 0
+		let dx = x < rect.left + zone ? -(rect.left + zone - x) : x > rect.right - zone ? x - (rect.right - zone) : 0
+		return {dx, dy}
 	}
 
 	/// Scroll while a handle is dragged near the edges.
@@ -376,9 +421,7 @@ export class TouchSelection {
 		cancelAnimationFrame(this.autoscrollFrame)
 		let d = this.drag
 		if (!d) return
-		let rect = this.host.surface.getBoundingClientRect(), zone = this.host.lineHeight * AUTOSCROLL_ZONE
-		let dy = d.y < rect.top + zone ? -(rect.top + zone - d.y) : d.y > rect.bottom - zone ? d.y - (rect.bottom - zone) : 0
-		let dx = d.x < rect.left + zone ? -(rect.left + zone - d.x) : d.x > rect.right - zone ? d.x - (rect.right - zone) : 0
+		let {dx, dy} = this.edgeDelta(d.x, d.y, this.host.surface.getBoundingClientRect())
 		if (!dx && !dy) return
 		let step = () => {
 			if (!this.drag) return
@@ -395,6 +438,7 @@ export class TouchSelection {
 	gestureEnd(_x: number, _y: number, cancelled = false) {
 		let d = this.drag
 		this.drag = null
+		this.endMagnifier()
 		cancelAnimationFrame(this.autoscrollFrame)
 		if (!d) return
 		if (d.kind == "text") {
@@ -474,6 +518,7 @@ export class TouchSelection {
 	reset() {
 		if (this.drag?.kind == "text") this.host.setDropPos(null)
 		this.drag = null
+		this.endMagnifier()
 		this.lastTap = {time: 0, pos: -1, count: 0}
 		if (this.mode != "none") this.setMode("none")
 		this.hideMenu()

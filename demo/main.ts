@@ -351,6 +351,7 @@ let view = new CanvasView({
 	cursorBlinkRate: +get("blink"),
 	touchSelection: {
 		handleSize: +get("handles"),
+		magnifier: get("magnifier") == "1",
 		onHaptic: () => navigator.vibrate?.(20),
 		onMenu: e => {
 			if (e.type == "hide") {

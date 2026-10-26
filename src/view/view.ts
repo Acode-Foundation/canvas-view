@@ -30,6 +30,7 @@ import {CanvasTheme, type CanvasThemeSpec, darkTheme} from "./theme"
 import {ClassStyleReader, sameHighlighters, stateHighlighters} from "./highlight"
 import type {Highlighter} from "@lezer/highlight"
 import {TouchSelection, type TouchSelectionConfig} from "./touchselect"
+import {Magnifier} from "./magnifier"
 
 export interface CanvasViewConfig {
 	parent?: HTMLElement
@@ -1114,6 +1115,22 @@ export class CanvasView implements ScrollHost, InputHost {
 	}
 
 	/// Position the visible block widgets (DOM over their rows).
+	/// Created on first use (most views never drag a handle).
+	private magnifier: Magnifier | null = null
+
+	/// The touch selection magnifier copies from the frame just drawn:
+	/// a GPU canvas can be read only in the task that drew it.
+	private placeMagnifier() {
+		let at = this.touchSelection.magnifierPoint
+		if (!at) {
+			this.magnifier?.hide()
+			return
+		}
+		let config = this.config.touchSelection?.magnifier
+		this.magnifier ??= new Magnifier(this.scrollDOM, typeof config == "object" ? config : {})
+		this.magnifier.show(this.canvas, at.x, at.y, {width: this.width, height: this.height, lineHeight: this.lineHeight, fontSize: this.font.size})
+	}
+
 	private placeBlocks() {
 		if (!this.decos.blockCount && !this.blocks.size) return
 		let blocks = this.blocks, lines = this.lines, lh = this.lineHeight
@@ -1883,6 +1900,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		this.backend.syncAtlas(this.atlas)
 		let t3 = performance.now()
 		this.backend.render(this.theme.background, this.passes())
+		this.placeMagnifier()
 		this.placeBlocks()
 		this.clipBlocks()
 		this.placeMarkerProxy()
@@ -2601,7 +2619,12 @@ export class CanvasView implements ScrollHost, InputHost {
 
 		let cursors = this.cursorRects
 		cursors.reset()
+		// A touch selection shows its handles and no cursor, like native
+		// Android fields and sora-editor (mouse and keyboard selections
+		// keep CodeMirror's cursor at the head).
+		let touchSelection = this.touchSelection.mode == "selection"
 		for (let range of sel.ranges) {
+			if (touchSelection && !range.empty) continue
 			let {row, x} = this.posCoords(range.head, range.assoc)
 			if (row < first || row > last) continue
 			let cwidth = Math.max(1, Math.min(10, this.config.cursorWidth ?? 2))
@@ -3311,6 +3334,7 @@ export class CanvasView implements ScrollHost, InputHost {
 
 	destroy() {
 		this.destroyed = true
+		this.magnifier?.destroy()
 		if (this.prewarmTimer != null) clearTimeout(this.prewarmTimer)
 		if (this.probeTimer) clearTimeout(this.probeTimer)
 		if (this.blinkTimer != null) clearTimeout(this.blinkTimer)

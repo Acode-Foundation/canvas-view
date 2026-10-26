@@ -240,7 +240,9 @@ installed.
 - `touch-action: none`: the view handles every pointer event and never
   uses native overflow scrolling, so **blank frames are impossible by
   construction**. Drags follow the finger 1:1; flings use Android's
-  `OverScroller` spline and LSQ2 velocity tracker.
+  `OverScroller` spline and LSQ2 velocity tracker, and repeated flicks
+  add up (Android's flywheel): a touch moving along a running fling
+  keeps it, and the next flick adds its velocity.
 - Touch selection mechanics (handles, long press, double/triple tap) are
   the library's; the **menu is the consumer's**, driven by `onMenu`.
 - Mouse selection follows CodeMirror's `MouseSelection`, including

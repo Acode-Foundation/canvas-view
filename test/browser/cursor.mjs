@@ -115,7 +115,7 @@ async function open(kind, lines) {
 		if (i < 0) throw new Error(`"${needle}" not in line ${line}: ${l.text}`)
 		return l.from + i + (after ? needle.length : 0)
 	}, line, needle, after)
-	return {page, tap, swipe, click, head, target, drawnCursorX, posOf, frames}
+	return {page, cdp, tap, swipe, click, head, target, drawnCursorX, posOf, frames}
 }
 
 // ---- Unicode fixture -------------------------------------------------------
@@ -213,6 +213,40 @@ async function open(kind, lines) {
 	check("fling was running before the tap", flinging)
 	check("tap stops the fling", Math.abs(stillAt - stoppedAt) < 1, `${stoppedAt} → ${stillAt}`)
 	check("tap that stops a fling keeps the cursor", afterTap.head == before.head, `${before.head} → ${afterTap.head}`)
+
+	// Flicking again along a fling adds to it (Android's flywheel); a
+	// flick against it, or a finger held still on it, doesn't.
+	let flingDistance = () => t.page.evaluate(() => view.scroller.flingY?.distance ?? 0)
+	let reset = () => t.page.evaluate(async () => {
+		view.scroller.cancelFling()
+		view.scrollTop = view.lineTop(5000)
+		await new Promise(r => requestAnimationFrame(r))
+	})
+	await reset()
+	await t.swipe(200, 700, 400, 6)
+	let single = await flingDistance()
+	await t.frames()
+	await t.swipe(200, 700, 400, 6)
+	let boosted = await flingDistance()
+	check("second flick adds to the fling", single > 0 && boosted > single * 1.5, `single ${single.toFixed(0)}, after second ${boosted.toFixed(0)}`)
+	await reset()
+	await t.swipe(200, 700, 400, 6)
+	await t.frames()
+	await t.swipe(200, 400, 700, 6)
+	let reverse = await flingDistance()
+	check("flick against a fling reverses it without boost", reverse < 0 && -reverse < single * 1.3, `single ${single.toFixed(0)}, reverse ${reverse.toFixed(0)}`)
+	await reset()
+	await t.swipe(200, 700, 400, 6)
+	await t.frames()
+	await t.cdp.send("Input.dispatchTouchEvent", {type: "touchStart", touchPoints: [{x: 200, y: 500, id: 1}]})
+	await sleep(120)
+	let heldAt = await t.page.evaluate(() => view.scrollTop)
+	await t.frames()
+	let heldStill = await t.page.evaluate(() => ({top: view.scrollTop, scrolling: view.scrolling}))
+	await t.cdp.send("Input.dispatchTouchEvent", {type: "touchEnd", touchPoints: []})
+	await t.frames()
+	check("finger held on a fling stops it", !heldStill.scrolling && Math.abs(heldStill.top - heldAt) < 1, `${heldAt} → ${heldStill.top}`)
+	check("held finger on a fling doesn't move the cursor", (await t.head()).head == before.head)
 
 	// Tap below the last line → document end.
 	await t.page.evaluate(() => { view.scrollTop = view.maxScrollTop })

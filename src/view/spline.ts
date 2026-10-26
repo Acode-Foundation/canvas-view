@@ -89,11 +89,6 @@ export class VelocityTracker {
 		this.t.length = this.x.length = 0
 	}
 
-	/// Offset every sample (the content moved under the finger).
-	shift(d: number) {
-		for (let i = 0; i < this.x.length; i++) this.x[i] += d
-	}
-
 	add(time: number, pos: number) {
 		let n = this.t.length
 		// A long pause means the finger stopped: older samples no longer

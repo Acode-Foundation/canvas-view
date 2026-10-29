@@ -8,16 +8,13 @@
 import {createServer} from "node:http"
 import {readFile} from "node:fs/promises"
 import {extname, join, resolve} from "node:path"
-import {homedir} from "node:os"
-import puppeteer from "puppeteer-core"
+import {launch} from "../../bench/harness.mjs"
 
 const args = Object.fromEntries(process.argv.slice(2).map(a => {
 	let [k, v] = a.replace(/^--/, "").split("=")
 	return [k, v ?? "true"]
 }))
 const backend = args.backend ?? "webgl2"
-const browserPath = args.browser ?? join(homedir(),
-	"Library/Caches/ms-playwright/chromium-1223/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
 const root = resolve(import.meta.dirname, "../../demo-dist")
 
 const server = createServer(async (req, res) => {
@@ -32,7 +29,7 @@ const server = createServer(async (req, res) => {
 	}
 }).listen(0)
 const port = server.address().port
-const browser = await puppeteer.launch({executablePath: browserPath, headless: true, args: ["--enable-unsafe-webgpu"]})
+const browser = await launch(args)
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 let failures = 0, passes = 0

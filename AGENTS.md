@@ -35,6 +35,7 @@ bun install
 bun run check          # TypeScript (tsc --noEmit)
 bun run test           # unit tests (test/*.test.ts)
 bun run test:browser   # browser suites on both backends, with real touch/mouse/key/IME events
+bun run test:webkit    # the WebKit (iOS) suite alone, both backends
 bun run demo           # demo at http://127.0.0.1:5173 (index.html = canvas-view, cm.html = CodeMirror)
 bun run demo:lan       # same on 0.0.0.0:5199, for phones on the LAN
 bun run build          # dist/
@@ -45,7 +46,12 @@ node bench/compare.mjs --cpu=1,4,6              # vs CodeMirror 6, Ace and Monac
 
 Browser tests and benchmarks launch Chromium through Puppeteer. Pass
 `--browser=<path>` or set `CHROME_PATH` to choose the binary (the default
-is Playwright's cached "Chrome for Testing" on macOS). Benchmarks emulate
+is the "Chrome for Testing" of the pinned `playwright` devDependency:
+`bunx playwright install chromium webkit` once), and `CHROME_ARGS` to add
+flags. `test/browser/webkit.mjs` runs in Playwright's WebKit instead, the
+closest headless stand-in for iOS. CI (`.github/workflows/ci.yml`) runs
+every browser suite on macOS, on both backends: their pixel and geometry
+checks assume its fonts, and its WebKit is Apple's port. Benchmarks emulate
 a 412×860 phone at DPR 2.625 with touch and throttle the CPU through CDP.
 `--device` variants drive a USB-connected phone's WebView over DevTools
 (see the comment at the top of each script).

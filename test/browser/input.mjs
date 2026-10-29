@@ -102,7 +102,9 @@ await page.keyboard.up(mod)
 check("Mod-z undoes typing", await line3() == "undo", JSON.stringify(await line3()))
 await page.keyboard.down(mod)
 await page.keyboard.down("Shift")
-await page.keyboard.press("z")
+// "Z", as browsers report it: with Control held, Puppeteer's "z" stays
+// lowercase, which CodeMirror reads as Ctrl-z (undo) on Linux.
+await page.keyboard.press("Z")
 await page.keyboard.up("Shift")
 await page.keyboard.up(mod)
 check("Mod-Shift-z redoes", await line3() == "undo me", JSON.stringify(await line3()))

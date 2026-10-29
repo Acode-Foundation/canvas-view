@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Types, unit tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run test
+      - run: bun run build
+
+  browser:
+    name: ${{ matrix.engine }} ${{ matrix.backend }}
+    # macOS: the suites' pixel and geometry checks are written against its
+    # fonts, and Playwright's WebKit there is Apple's port (Metal,
+    # CoreText, WebGPU), the closest to iOS Safari. On Linux, other
+    # monospace metrics break wrapping and bidi checks, and its WebKit
+    # build has no WebGPU.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [chromium, webkit]
+        backend: [webgl2, webgpu]
+    env:
+      # Lets Chromium fall back to SwiftShader if the runner has no GPU.
+      CHROME_ARGS: --enable-unsafe-swiftshader
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install ${{ matrix.engine }}
+      - run: bun run demo:build
+      - name: Browser suites
+        run: |
+          if [ "${{ matrix.engine }}" = webkit ]; then
+            suites="webkit"
+          else
+            suites="cursor input selection mouse keyboard layout bidi context sticky ligatures"
+            [ "${{ matrix.backend }}" = webgl2 ] && suites="$suites input:--input=textarea"
+          fi
+          failed=""
+          for s in $suites; do
+            name=${s%%:*}
+            extra=$([ "$name" != "$s" ] && echo "${s#*:}" || true)
+            echo "::group::$s"
+            node test/browser/$name.mjs --backend=${{ matrix.backend }} $extra || failed="$failed $s"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::Failed:$failed"
+            exit 1
+          fi

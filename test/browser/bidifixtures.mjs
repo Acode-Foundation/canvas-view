@@ -70,8 +70,9 @@ export async function compareWithBrowser(lines, mode) {
 		let theirs = units.map((u, i) => {
 			range.setStart(node, u.from)
 			range.setEnd(node, u.to)
-			let rects = range.getClientRects()
-			return {i, x: rects.length ? rects[0].left : -1}
+			// WebKit adds an empty rect where a unit meets a run of the other direction.
+			let rect = [...range.getClientRects()].find(r => r.width > 0)
+			return {i, x: rect ? rect.left : -1}
 		})
 		// Whitespace order is ambiguous at run edges in the DOM's rects.
 		let keep = u => !/^\s+$/.test(text.slice(units[u.i].from, units[u.i].to))

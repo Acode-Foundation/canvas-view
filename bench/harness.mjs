@@ -3,8 +3,8 @@
 import {createServer} from "node:http"
 import {readFile} from "node:fs/promises"
 import {extname, join, resolve} from "node:path"
-import {homedir} from "node:os"
 import puppeteer from "puppeteer-core"
+import {chromium} from "playwright"
 
 const types = {".html": "text/html", ".js": "text/javascript", ".css": "text/css"}
 
@@ -34,14 +34,18 @@ export async function serveDemo(port = 0) {
 	return {url: `http://localhost:${server.address().port}`, close: () => server.close()}
 }
 
-export const defaultBrowser = join(homedir(),
-	"Library/Caches/ms-playwright/chromium-1223/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
+/// Playwright's Chrome for Testing, pinned by the playwright devDependency
+/// (`bunx playwright install chromium`).
+export const defaultBrowser = chromium.executablePath()
 
+/// `CHROME_ARGS` adds flags, e.g. CI's software GPU (SwiftShader) on a
+/// machine without one.
 export function launch(args = {}) {
 	return puppeteer.launch({
 		executablePath: args.browser ?? process.env.CHROME_PATH ?? defaultBrowser,
 		headless: args.headful ? false : true,
-		args: ["--enable-unsafe-webgpu", "--ignore-gpu-blocklist", "--no-first-run"]
+		args: ["--enable-unsafe-webgpu", "--ignore-gpu-blocklist", "--no-first-run",
+			...(process.env.CHROME_ARGS ?? "").split(/\s+/).filter(Boolean)]
 	})
 }
 

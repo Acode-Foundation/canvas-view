@@ -48,7 +48,8 @@
     "build": "bun build ./src/index.ts --outdir ./dist --target browser --format esm --packages external && tsc -p tsconfig.build.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "bun test test/*.test.ts",
-    "test:browser": "vite build && node test/browser/cursor.mjs && node test/browser/cursor.mjs --backend=webgpu && node test/browser/input.mjs && node test/browser/input.mjs --input=textarea && node test/browser/input.mjs --backend=webgpu && node test/browser/selection.mjs && node test/browser/selection.mjs --backend=webgpu && node test/browser/mouse.mjs && node test/browser/mouse.mjs --backend=webgpu && node test/browser/keyboard.mjs && node test/browser/keyboard.mjs --backend=webgpu && node test/browser/layout.mjs && node test/browser/layout.mjs --backend=webgpu && node test/browser/bidi.mjs && node test/browser/bidi.mjs --backend=webgpu && node test/browser/context.mjs && node test/browser/context.mjs --backend=webgpu && node test/browser/sticky.mjs && node test/browser/sticky.mjs --backend=webgpu && node test/browser/ligatures.mjs && node test/browser/ligatures.mjs --backend=webgpu",
+    "test:browser": "vite build && node test/browser/cursor.mjs && node test/browser/cursor.mjs --backend=webgpu && node test/browser/input.mjs && node test/browser/input.mjs --input=textarea && node test/browser/input.mjs --backend=webgpu && node test/browser/selection.mjs && node test/browser/selection.mjs --backend=webgpu && node test/browser/mouse.mjs && node test/browser/mouse.mjs --backend=webgpu && node test/browser/keyboard.mjs && node test/browser/keyboard.mjs --backend=webgpu && node test/browser/layout.mjs && node test/browser/layout.mjs --backend=webgpu && node test/browser/bidi.mjs && node test/browser/bidi.mjs --backend=webgpu && node test/browser/context.mjs && node test/browser/context.mjs --backend=webgpu && node test/browser/sticky.mjs && node test/browser/sticky.mjs --backend=webgpu && node test/browser/ligatures.mjs && node test/browser/ligatures.mjs --backend=webgpu && bun run test:webkit",
+    "test:webkit": "node test/browser/webkit.mjs && node test/browser/webkit.mjs --backend=webgpu",
     "demo": "vite --host 127.0.0.1",
     "demo:lan": "vite --host 0.0.0.0 --port 5199",
     "demo:build": "vite build",
@@ -74,6 +75,7 @@
     "@webgpu/types": "^0.1.74",
     "ace-builds": "^1.45.0",
     "monaco-editor": "^0.57.0",
+    "playwright": "1.60.0",
     "puppeteer-core": "^25.14.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"

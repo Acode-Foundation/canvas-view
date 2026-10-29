@@ -227,15 +227,16 @@ bun install
 bun run demo           # http://127.0.0.1:5173
 bun run check          # TypeScript
 bun run test           # unit tests
-bun run test:browser   # browser tests, both backends
+bun run test:browser   # browser tests, both backends, Chromium and WebKit
 bun run bench          # fling benchmark vs CodeMirror 6
 ```
 
 The demo has a ⚙ panel for every option and loads CodeMirror's search,
 autocomplete, lint and folding. `cm.html`, `ace.html` and `monaco.html`
 show the same file in the other editors. Browser tests and benchmarks
-launch Chromium through Puppeteer: pass `--browser=<path>` or set
-`CHROME_PATH`.
+launch Chromium through Puppeteer (`--browser=<path>` or `CHROME_PATH`
+to choose it); the WebKit suite stands in for iOS Safari. Install the
+browsers once with `bunx playwright install chromium webkit`.
 
 ## Contributing
 

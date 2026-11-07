@@ -430,6 +430,29 @@ async function open(query) {
 	let line = await page.evaluate(() => view.state.doc.lineAt(view.state.selection.main.head).text.trim())
 	check("autocomplete: Enter accepts", line == "retries", line)
 
+	// The demo completes with canvas-view's word index (completeWords): a
+	// word that only appears far below the cursor, beyond the lines it
+	// scans directly, comes from the index.
+	let deep = await page.evaluate(() => {
+		let doc = view.state.doc
+		for (let n = doc.lines; n > 300; n--) {
+			let m = /loadResource\d+/.exec(doc.line(n).text)
+			if (m) return m[0]
+		}
+		return null
+	})
+	await t.key("Enter")
+	await page.keyboard.type(deep.slice(0, -1))
+	await page.waitForFunction(() => cmApi.currentCompletions(view.state).length > 0, {timeout: 3000}).catch(() => null)
+	let offered = await page.evaluate(() => cmApi.currentCompletions(view.state).map(c => c.label))
+	check("word completion: a word far from the cursor is offered from the index", offered.includes(deep),
+		JSON.stringify({deep, offered: offered.slice(0, 12)}))
+	await t.key("Escape")
+	await page.evaluate(() => {
+		let l = view.state.doc.lineAt(view.state.selection.main.head)
+		view.dispatch({changes: {from: l.from - 1, to: l.to}})
+	})
+
 	// Lint (CodeMirror's linter field) draws wavy underlines.
 	await sleep(700)
 	let lint = await page.evaluate(() => view.decos.sets.length)

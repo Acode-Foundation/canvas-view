@@ -84,6 +84,7 @@ src/
     blocks.ts      block widgets' DOM over their reserved rows
     brackets.ts    rainbow bracket depths from the syntax tree
     sticky.ts      sticky scroll scopes and header slots
+    words.ts       word completion from an incremental index of the document's words
     input.ts       EditContext input (+ textarea fallback), keymaps, clipboard
     touchselect.ts touch selection: taps, long press, handles, menu/haptic hooks
     magnifier.ts   loupe over the text under a finger dragging a selection

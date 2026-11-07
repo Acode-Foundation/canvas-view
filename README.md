@@ -194,6 +194,26 @@ new CanvasView({
 })
 ```
 
+### Word completion
+
+`completeWords` offers the document's words from an index that
+recounts only the lines that changed, ranks words near the cursor first
+and returns at most 200 matches. CodeMirror's `completeAnyWord`
+re-merges a big file's word lists on every query and returns every
+distinct word: in a 4MB file on a 2GB phone, ~35ms per query against
+~2ms. `wordIndex()` keeps the index and does nothing until the first
+query, so it can go in every view (it works with `EditorView` too).
+
+```ts
+import {autocompletion} from "@codemirror/autocomplete"
+import {completeWords, wordIndex, wordCompletion} from "@acode.app/canvas-view"
+
+// As the only source:
+[autocompletion({override: [completeWords]}), wordIndex()]
+// Or next to the languages' own sources (language data):
+[autocompletion(), wordCompletion()]
+```
+
 ## CodeMirror compatibility
 
 - **Unchanged:** `EditorState`, transactions, facets, StateFields,

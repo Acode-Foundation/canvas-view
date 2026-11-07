@@ -8,3 +8,4 @@ export {TouchSelection, wordRangeAt, type HandleKind, type SelectionMenuEvent, t
 export type {MagnifierConfig} from "./view/magnifier"
 export type {MarkStyle, CanvasWidgetSpec} from "./view/decorations"
 export type {WrapIndent} from "./view/lines"
+export {wordCompletion, wordIndex, completeWords, type WordCompletionConfig} from "./view/words"

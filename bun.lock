@@ -28,6 +28,12 @@
         "typescript": "^7.0.2",
         "vite": "^8.3.4",
       },
+      "peerDependencies": {
+        "@codemirror/autocomplete": "^6.0.0",
+      },
+      "optionalPeers": [
+        "@codemirror/autocomplete",
+      ],
     },
   },
   "packages": {

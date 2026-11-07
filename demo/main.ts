@@ -1,4 +1,4 @@
-import {autocompletion, closeBrackets, closeBracketsKeymap, completeAnyWord, completionKeymap} from "@codemirror/autocomplete"
+import {autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, currentCompletions} from "@codemirror/autocomplete"
 import {defaultKeymap, history, historyKeymap, indentWithTab} from "@codemirror/commands"
 import {html} from "@codemirror/lang-html"
 import {javascript} from "@codemirror/lang-javascript"
@@ -10,7 +10,7 @@ import {EditorState, type Extension, type Range, RangeSet, RangeSetBuilder, Stat
 import {crosshairCursor, Decoration, type DecorationSet, dropCursor, EditorView, gutter, gutterLineClass, GutterMarker, highlightWhitespace,
 	hoverTooltip, keymap, lineNumberMarkers, MatchDecorator, rectangularSelection, ViewPlugin, type ViewUpdate,
 	WidgetType} from "@codemirror/view"
-import {CanvasView, darkTheme, lightTheme} from "../src/index"
+import {CanvasView, completeWords, darkTheme, lightTheme, wordIndex} from "../src/index"
 import {type FixtureKind, makeFixture} from "./fixtures"
 import {fontFamily, guideOption, ligatureOption, mountSettings, readOnlyCompartment, setting, stickyOption, whitespaceOption} from "./settings"
 
@@ -272,7 +272,7 @@ const breakpoints = [breakpointState, breakpointLines, breakpointTheme, gutter({
 
 let full: Extension = ext == "full" ? [
 	codeFolding(), bracketMatching(), highlightSelectionMatches(), search({top: true}),
-	autocompletion({override: [completeAnyWord]}), demoLinter, lintGutter(), get("breakpoints") == "1" ? breakpoints : [], wordHover, inlayHints, colorChips, lenses, fileHeader, collapsed,
+	autocompletion({override: [completeWords]}), wordIndex(), demoLinter, lintGutter(), get("breakpoints") == "1" ? breakpoints : [], wordHover, inlayHints, colorChips, lenses, fileHeader, collapsed,
 	rectangularSelection(), crosshairCursor(), dropCursor(),
 	light ? [] : EditorView.theme({}, {dark: true}),
 	keymap.of([...completionKeymap, ...searchKeymap, ...foldKeymap, ...lintKeymap])
@@ -388,7 +388,7 @@ declare global {
 }
 window.view = view
 // For tests: CodeMirror functions to call against the view.
-window.cmApi = {openSearchPanel, closeSearchPanel, syntaxTree, foldable, EditorView, ViewPlugin, StateEffect, StateField, Decoration, WidgetType,
+window.cmApi = {openSearchPanel, closeSearchPanel, currentCompletions, syntaxTree, foldable, EditorView, ViewPlugin, StateEffect, StateField, Decoration, WidgetType,
 	gutter, GutterMarker, gutterLineClass, lineNumberMarkers, RangeSet,
 	highlightWhitespace, breakpointState, HighlightStyle, syntaxHighlighting, highlightingFor, classHighlighter, tags, EditorState, javascript,
 	readOnlyCompartment, setDiagnostics}

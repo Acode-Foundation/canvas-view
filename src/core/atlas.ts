@@ -16,6 +16,34 @@ export interface GlyphEntry {
 	readonly colored: boolean
 }
 
+/// Add a rounded rectangle to the current path, like the 2D context's
+/// `roundRect` (radii: one for all corners, or top-left, top-right,
+/// bottom-right, bottom-left), which Chromium only has since 99:
+/// Android System WebView 80 throws on it.
+export function roundRectPath(cx: CanvasPath, x: number, y: number, w: number, h: number, radii: number | readonly number[]) {
+	let [tl, tr, br, bl] = typeof radii == "number" ? [radii, radii, radii, radii] : radii
+	// Radii too large for the sides are scaled down together, as the
+	// canvas spec does.
+	let f = Math.min(1, w / (tl + tr || 1), w / (bl + br || 1), h / (tl + bl || 1), h / (tr + br || 1))
+	tl *= f; tr *= f; br *= f; bl *= f
+	cx.moveTo(x + tl, y)
+	cx.arcTo(x + w, y, x + w, y + h, tr)
+	cx.arcTo(x + w, y + h, x, y + h, br)
+	cx.arcTo(x, y + h, x, y, bl)
+	cx.arcTo(x, y, x + w, y, tl)
+	cx.closePath()
+}
+
+// Right-to-left letters (Hebrew, Arabic, Syriac, Thaana, N'Ko and the
+// astral RTL scripts).
+const rtlText = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc\u{10800}-\u{10fff}\u{1e800}-\u{1efff}]/u
+
+// Whether this browser measures right-to-left text's ink as if it were
+// drawn leftward from the origin (Chromium 80, Android System WebView
+// 80): an "ltr" context draws it rightward, so its bounds are off by
+// its width and the clipped slot came out blank. Found on first use.
+let rtlBoundsMirrored: boolean | undefined
+
 /// Entry for glyphs that draw nothing (spaces, unprintable padding).
 export const EMPTY_GLYPH: GlyphEntry = {u: 0, v: 0, w: 0, h: 0, ox: 0, oy: 0, cells: 1, colored: false}
 
@@ -192,8 +220,10 @@ export class GlyphAtlas {
 		cx.clip()
 		cx.translate(x, y)
 		cx.fillStyle = cx.strokeStyle = this.maskColor
-		draw(cx)
-		cx.restore()
+		// A throwing callback (an API the browser lacks) mustn't leave
+		// the clip and translation on the atlas canvas for later glyphs.
+		try { draw(cx) }
+		finally { cx.restore() }
 		this.markDirty(x, y, x + w, y + h)
 		found = {u: x, v: y, w, h, ox: 0, oy: 0, cells: 0, colored}
 		map.set(fullKey, found)
@@ -369,9 +399,19 @@ export class GlyphAtlas {
 		// Size the slot to the glyph's ink (plus a texel of antialiasing
 		// margin) rather than a fixed padding, so far more glyphs fit
 		// before the atlas has to grow.
-		let ink = cx.measureText(g)
-		let left = Math.floor(-ink.actualBoundingBoxLeft) - 1
-		let right = Math.ceil(ink.actualBoundingBoxRight) + 1
+		let ink = cx.measureText(g), inkLeft = ink.actualBoundingBoxLeft, inkRight = ink.actualBoundingBoxRight
+		if (rtlText.test(g)) {
+			if (rtlBoundsMirrored === undefined) {
+				let alef = cx.measureText("\u05d0")
+				rtlBoundsMirrored = alef.actualBoundingBoxRight < alef.actualBoundingBoxLeft
+			}
+			if (rtlBoundsMirrored) {
+				inkLeft -= ink.width
+				inkRight += ink.width
+			}
+		}
+		let left = Math.floor(-inkLeft) - 1
+		let right = Math.ceil(inkRight) + 1
 		if (!(right > left + 2)) return {...EMPTY_GLYPH, cells}
 		let w = Math.min(this.maxSize, right - left), h = this.slotH
 		while (w > this.size && this.size < this.maxSize) this.grow()

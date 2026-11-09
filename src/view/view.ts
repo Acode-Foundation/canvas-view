@@ -3,7 +3,7 @@ import {TreeFragment} from "@lezer/common"
 import {type ChangeDesc, CharCategory, EditorSelection, EditorState, type Extension, findClusterBreak, type SelectionRange,
 	StateEffect, type StateEffectType, Transaction, type TransactionSpec} from "@codemirror/state"
 import {BidiSpan, BlockType, Direction, EditorView, type GutterMarker, gutterLineClass, lineNumberMarkers, type ViewPlugin, type WidgetType} from "@codemirror/view"
-import {fontVariant, type FontVariant, type GlyphEntry, GlyphAtlas} from "../core/atlas"
+import {fontVariant, type FontVariant, type GlyphEntry, GlyphAtlas, roundRectPath} from "../core/atlas"
 import {deviceSize, type BackendKind, type DrawPass, type RenderBackend} from "../core/backend"
 import {type PackedColor, parseColor} from "../core/color"
 import {GLYPH_STRIDE, InstanceBuffer, pushGlyph, pushRect, RECT_STRIDE} from "../core/instances"
@@ -2364,10 +2364,10 @@ export class CanvasView implements ScrollHost, InputHost {
 			if (outline) {
 				let lw = Math.max(1, Math.round(dpr))
 				cx.lineWidth = lw
-				cx.roundRect(lw / 2, lw / 2, dw - lw, dh - lw, r)
+				roundRectPath(cx, lw / 2, lw / 2, dw - lw, dh - lw, r)
 				cx.stroke()
 			} else {
-				cx.roundRect(0, 0, dw, dh, r)
+				roundRectPath(cx, 0, 0, dw, dh, r)
 				cx.fill()
 			}
 		})
@@ -2890,7 +2890,7 @@ export class CanvasView implements ScrollHost, InputHost {
 					cx.translate(d / 2, 0)
 					cx.rotate(Math.PI / 4)
 					cx.beginPath()
-					cx.roundRect(0, 0, s, s, [0, r, r, r])
+					roundRectPath(cx, 0, 0, s, s, [0, r, r, r])
 					cx.fill()
 				})
 				gx = x - d / 2 / dpr
@@ -2898,7 +2898,7 @@ export class CanvasView implements ScrollHost, InputHost {
 				let radii = kind == "end" ? [0, r, r, r] : [r, 0, r, r]
 				g = this.atlas.shape(`handle-${kind}-${s}`, s, s, cx => {
 					cx.beginPath()
-					cx.roundRect(0, 0, s, s, radii)
+					roundRectPath(cx, 0, 0, s, s, radii)
 					cx.fill()
 				})
 				gx = kind == "end" ? x : x - s / dpr

@@ -156,3 +156,31 @@ describe("LineLayouts", () => {
 		}
 	})
 })
+
+// Android System WebView before 87 has no Intl.Segmenter: a copy of the
+// module loaded without it splits graphemes like the browser does
+// (with CodeMirror's findClusterBreak, which only differs by joining
+// letters around a ZWJ, as CodeMirror's cursor motion does).
+test("graphemes without Intl.Segmenter", async () => {
+	let lines = [
+		"x👩🏽‍💻y", "flags 🇫🇷🇩🇪🇯🇵 end", "keycap 1️⃣ #️⃣", "skin 👍🏿 ok", "é ạ̈ ñ",
+		"世界 カタカナ 한국어", "café ñandú", "mix 😀 x 🏳️‍🌈 y ❤️ z", "tab\t界\tx", "ctl\u0001é\u007f"
+	]
+	let real = Intl.Segmenter
+	delete (Intl as {Segmenter?: unknown}).Segmenter
+	let fallback: typeof import("../src/view/layout")
+	try {
+		// A query string loads a second copy of the module.
+		let copy = "../src/view/layout.ts?no-segmenter"
+		fallback = await import(copy)
+		// The module picks its segmenter on first use.
+		new fallback.LineLayouts(() => atlas, 4).get(lines[0])
+	} finally {
+		(Intl as {Segmenter?: unknown}).Segmenter = real
+	}
+	for (let text of lines) {
+		let without = new fallback.LineLayouts(() => atlas, 4).get(text)!
+		let withIt = layouts().get(text)!
+		expect(without.map(c => [c.from, c.to, c.col, c.kind])).toEqual(withIt.map(c => [c.from, c.to, c.col, c.kind]))
+	}
+})

@@ -559,6 +559,100 @@ check("mouse double click selects an emoji run", s.text == "😀🎉", JSON.stri
 	check("no errors from taps after the document changed", errors.length == 0, errors.join("; "))
 }
 
+// Old WebViews (Android System WebView 80): without the 2D context's
+// roundRect (Chromium 99+) handles are still drawn (calling it threw in
+// the frame, so nothing was drawn while handles showed), and without
+// Intl.Segmenter (Chromium 87+) lines with non-ASCII text are laid out
+// (it threw on the first one), and right-to-left words are drawn where
+// measureText reports their ink as if drawn leftward (Chromium 80; they
+// came out blank).
+{
+	await page.evaluateOnNewDocument(() => {
+		delete CanvasRenderingContext2D.prototype.roundRect
+		if (typeof OffscreenCanvasRenderingContext2D != "undefined") delete OffscreenCanvasRenderingContext2D.prototype.roundRect
+		delete Intl.Segmenter
+		for (let proto of [CanvasRenderingContext2D.prototype, typeof OffscreenCanvasRenderingContext2D != "undefined" && OffscreenCanvasRenderingContext2D.prototype]) {
+			if (!proto) continue
+			let measure = proto.measureText
+			proto.measureText = function(text) {
+				let m = measure.call(this, text)
+				if (!/[\u0590-\u08ff]/.test(text)) return m
+				return {width: m.width, actualBoundingBoxLeft: m.actualBoundingBoxLeft + m.width, actualBoundingBoxRight: m.actualBoundingBoxRight - m.width,
+					actualBoundingBoxAscent: m.actualBoundingBoxAscent, actualBoundingBoxDescent: m.actualBoundingBoxDescent,
+					fontBoundingBoxAscent: m.fontBoundingBoxAscent, fontBoundingBoxDescent: m.fontBoundingBoxDescent}
+			}
+		}
+	})
+	let errors = []
+	page.on("pageerror", e => errors.push(e.message))
+	await page.reload()
+	await page.waitForFunction("window.ready === true")
+	await sleep(300)
+	check("roundRect and Intl.Segmenter are gone after the reload", await page.evaluate(() => !CanvasRenderingContext2D.prototype.roundRect && !Intl.Segmenter))
+	let pt = await at(await posOf(9, "cache"))
+	await tap(pt.x, pt.y)
+	await frames()
+	check("without roundRect: cursor handle is drawn", await handlePixels("cursor") > 0.2)
+	pt = await at(await posOf(12, "cached") + 2)
+	await sleep(450)
+	await tap(pt.x, pt.y)
+	await tap(pt.x, pt.y)
+	await frames()
+	check("without roundRect: start and end handles are drawn", (await sel()).mode == "selection" && await handlePixels("start") > 0.2 && await handlePixels("end") > 0.2)
+	// Every grapheme boundary of a non-ASCII line maps to its drawn x and
+	// back, and graphemes take one step each.
+	let text = "café e\u0301 世界 👍🏿 🇫🇷 👩🏽‍💻 x"
+	let geo = await page.evaluate(text => {
+		let line = view.state.doc.line(20)
+		view.dispatch({changes: {from: line.from, insert: text + "\n"}, selection: {anchor: line.from}})
+		view.scrollPosIntoView(line.from)
+		let steps = [line.from], pos = line.from
+		while (pos < line.from + text.length) {
+			pos = view.moveByChar(view.state.selection.constructor.cursor(pos), true).head
+			steps.push(pos)
+		}
+		let back = steps.map(p => {
+			let c = view.coordsAtPos(p, 1)
+			return view.posAtCoords({x: c.left + 1, y: (c.top + c.bottom) / 2})
+		})
+		let xs = steps.map(p => view.coordsAtPos(p, 1).left)
+		return {steps: steps.map(p => p - line.from), back: back.map(p => p - line.from), increasing: xs.every((x, i) => !i || x > xs[i - 1])}
+	}, text).catch(e => ({error: e.message.split("\n")[0]}))
+	let graphemes = [...new Intl.Segmenter(undefined, {granularity: "grapheme"}).segment(text)].map(g => g.index).concat(text.length)
+	check("without Intl.Segmenter: the cursor steps by grapheme", JSON.stringify(geo.steps) == JSON.stringify(graphemes), JSON.stringify(geo.steps))
+	check("without Intl.Segmenter: positions map to x and back", JSON.stringify(geo.back) == JSON.stringify(geo.steps) && geo.increasing, JSON.stringify(geo))
+	await frames()
+	// A Hebrew and an Arabic word get ink where they're drawn.
+	for (let word of ["שלום", "مرحبا"]) {
+		let box = await page.evaluate(word => {
+			let line = view.state.doc.line(21)
+			view.dispatch({changes: {from: line.from, insert: word + " x\n"}})
+			view.scrollPosIntoView(line.from)
+			let a = view.coordsAtPos(line.from, 1), b = view.coordsAtPos(line.from + word.length, -1)
+			let left = Math.min(a.left, b.left), right = Math.max(a.left, b.left)
+			return {x: left, y: a.top, width: Math.max(1, right - left), height: a.bottom - a.top}
+		}, word)
+		await frames()
+		let png = await page.screenshot({clip: box, encoding: "base64"})
+		let ink = await page.evaluate(async png => {
+			let img = new Image()
+			img.src = "data:image/png;base64," + png
+			await img.decode()
+			let c = document.createElement("canvas")
+			c.width = img.width
+			c.height = img.height
+			let cx = c.getContext("2d")
+			cx.drawImage(img, 0, 0)
+			let d = cx.getImageData(0, 0, c.width, c.height).data, n = 0
+			// Text pixels: much brighter than the dark background.
+			for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 300) n++
+			return n / (c.width * c.height)
+		}, png)
+		check(`old WebView: right-to-left word ${word} is drawn`, ink > 0.03, `ink ${ink.toFixed(3)}`)
+	}
+	check("old WebView: no errors", errors.length == 0, errors.join("; "))
+}
+
 await browser.close()
 server.close()
 console.log(`\n${passes} passed, ${failures} failed (${backend})`)

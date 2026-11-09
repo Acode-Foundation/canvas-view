@@ -1,3 +1,4 @@
+import {findClusterBreak} from "@codemirror/state"
 import type {GlyphAtlas} from "../core/atlas"
 
 export const enum ClusterKind { Text = 0, Tab = 1, Control = 2, Shaped = 3 }
@@ -37,7 +38,10 @@ const shapedRun = new RegExp(`${runOf(rtlScripts)}|${runOf(ltrComplex)}`, "g")
 /// Upper bound for one shaped run, so it fits an atlas row.
 const MAX_SHAPED_CELLS = 48
 
-let segmenter: Intl.Segmenter | null = null
+// Grapheme segmenter, made on first use: null where the browser has
+// none (Intl.Segmenter is Chromium 87+, so not in Android System
+// WebView 80), and CodeMirror's `findClusterBreak` splits instead.
+let segmenter: Intl.Segmenter | null | undefined
 
 /// Width of a tab drawn at x (cells, may be fractional): to the next
 /// multiple of `tab`, or the one after when that is less than half a
@@ -105,9 +109,17 @@ export class LineLayouts {
 				for (let i = from; i < to; i++) push(i, i + 1, text[i])
 				return
 			}
-			if (!segmenter) segmenter = new Intl.Segmenter(undefined, {granularity: "grapheme"})
-			for (let {segment, index} of segmenter.segment(text.slice(from, to)))
-				push(from + index, from + index + segment.length, segment)
+			if (segmenter === undefined)
+				segmenter = typeof Intl.Segmenter == "function" ? new Intl.Segmenter(undefined, {granularity: "grapheme"}) : null
+			if (segmenter) {
+				for (let {segment, index} of segmenter.segment(text.slice(from, to)))
+					push(from + index, from + index + segment.length, segment)
+			} else {
+				for (let i = from, next; i < to; i = next) {
+					next = Math.min(to, findClusterBreak(text, i, true))
+					push(i, next, text.slice(i, next))
+				}
+			}
 		}
 		let pos = 0
 		shapedRun.lastIndex = 0

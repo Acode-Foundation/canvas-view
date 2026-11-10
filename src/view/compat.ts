@@ -196,20 +196,23 @@ export class PluginHost {
 		this.syncEditorAttrs()
 	}
 
-	private syncPlugins() {
+	/// Returns the instances that existed before (null when the plugins
+	/// didn't change).
+	private syncPlugins(): Set<Instance> | null {
 		let specs = this.view.state.facet(viewPluginFacet)
-		if (specs === this.specs) return
-		let old = this.instances, next: Instance[] = []
+		if (specs === this.specs) return null
+		let old = this.instances, next: Instance[] = [], kept = new Set<Instance>()
 		for (let spec of specs) {
 			let known = old.find(i => i.spec && i.spec.plugin == spec.plugin && i.spec.arg == spec.arg)
-			if (known) next.push(known)
+			if (known) { next.push(known); kept.add(known) }
 			else next.push({spec: replacedPlugins.has(spec.plugin) ? null : spec, value: null, mustUpdate: null})
 		}
-		for (let inst of old) if (next.indexOf(inst) < 0) this.destroyInstance(inst)
+		for (let inst of old) if (!kept.has(inst)) this.destroyInstance(inst)
 		this.specs = specs
 		this.specsVersion++
 		this.instances = next
 		for (let inst of next) this.ensure(inst)
+		return kept
 	}
 
 	private ensure(inst: Instance) {
@@ -259,12 +262,15 @@ export class PluginHost {
 	update(update: ViewUpdate) {
 		this.updating = true
 		try {
-			let reconfigured = update.transactions.some(tr => tr.reconfigured)
+			let reconfigured = update.transactions.some(tr => tr.reconfigured), kept: Set<Instance> | null = null
 			if (reconfigured) {
 				this.mountStyles()
-				this.syncPlugins()
+				kept = this.syncPlugins()
 			}
-			for (let inst of this.instances) inst.mustUpdate = update
+			// Like CodeMirror, plugins created by this update were created
+			// with its new state and don't get it: its startState may lack
+			// their own state fields ("Field is not present in this state").
+			for (let inst of this.instances) if (!kept || kept.has(inst)) inst.mustUpdate = update
 			for (let inst of this.instances) this.runUpdate(inst)
 			this.syncEditorAttrs()
 		} finally {

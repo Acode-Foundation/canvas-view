@@ -1336,6 +1336,31 @@ async function open(query) {
 	await page.close()
 }
 
+// ---- Plugins added by a reconfiguration ------------------------------------------
+// Like CodeMirror, a plugin created by an update doesn't get that update:
+// its startState may lack the plugin's own state field (issue #3: added
+// autocompletion or search plugins crashed when switching files).
+{
+	let t = await open("lines=20")
+	let {page} = t
+	let res = await page.evaluate(() => {
+		let {StateField, StateEffect, ViewPlugin} = cmApi
+		let field = StateField.define({create: () => 0, update: (v, tr) => v + (tr.docChanged ? 1 : 0)})
+		let updates = 0
+		let plugin = ViewPlugin.fromClass(class {
+			update(u) { updates++; u.startState.field(field) }
+		})
+		view.dispatch({effects: StateEffect.appendConfig.of([field, plugin])})
+		let afterAdd = updates
+		view.dispatch({changes: {from: 0, insert: "x"}})
+		return {afterAdd, afterEdit: updates, alive: view.plugin(plugin) != null}
+	})
+	check("plugins: a plugin added by a reconfiguration skips that update", res.afterAdd == 0, JSON.stringify(res))
+	check("plugins: it gets later updates", res.afterEdit == 1 && res.alive, JSON.stringify(res))
+	check("plugins added by a reconfiguration: no page errors", !t.errors.length, t.errors.join("; "))
+	await page.close()
+}
+
 // ---- Syntax colors from the state's highlighters ---------------------------------
 {
 	let t = await open("kind=js&lines=200&ext=basic")

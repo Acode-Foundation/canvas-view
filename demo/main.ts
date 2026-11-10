@@ -10,6 +10,7 @@ import {EditorState, type Extension, type Range, RangeSet, RangeSetBuilder, Stat
 import {crosshairCursor, Decoration, type DecorationSet, dropCursor, EditorView, gutter, gutterLineClass, GutterMarker, highlightWhitespace,
 	hoverTooltip, keymap, lineNumberMarkers, MatchDecorator, rectangularSelection, ViewPlugin, type ViewUpdate,
 	WidgetType} from "@codemirror/view"
+import {getCM, vim, Vim} from "@replit/codemirror-vim"
 import {CanvasView, completeWords, darkTheme, lightTheme, wordIndex} from "../src/index"
 import {type FixtureKind, makeFixture} from "./fixtures"
 import {fontFamily, guideOption, ligatureOption, mountSettings, readOnlyCompartment, setting, stickyOption, whitespaceOption} from "./settings"
@@ -282,6 +283,8 @@ let t0 = performance.now()
 let doc = kind == ("empty" as FixtureKind) ? "" : makeFixture(kind, lines)
 // Stock CodeMirror state-level extensions, unchanged.
 let state = EditorState.create({doc, extensions: [
+	// Vim's keymap must come before the others.
+	get("vim") == "1" ? vim({status: true}) : [],
 	EditorState.tabSize.of(+get("tabSize")),
 	EditorState.allowMultipleSelections.of(true),
 	readOnlyCompartment.of(EditorState.readOnly.of(get("readOnly") == "1")),
@@ -338,6 +341,10 @@ let view = new CanvasView({
 	rainbowBrackets: get("rainbow") == "1",
 	showWhitespace: whitespaceOption(get("whitespace")),
 	cursorWidth: +get("cursorWidth"),
+	cursorStyle: get("cursorStyle") as any,
+	cursorBlinking: get("cursorBlinking") as any,
+	cursorSmoothCaretAnimation: get("caretAnim") as any,
+	smoothScrolling: get("smoothScroll") == "1",
 	placeholder: "Start typing… (this is the placeholder option)",
 	wrapIndent: /^\d+$/.test(get("wrapIndent")) ? +get("wrapIndent") : get("wrapIndent") as any,
 	textDirection: get("dir") as any,
@@ -391,7 +398,7 @@ window.view = view
 window.cmApi = {openSearchPanel, closeSearchPanel, currentCompletions, syntaxTree, foldable, EditorView, ViewPlugin, StateEffect, StateField, Decoration, WidgetType,
 	gutter, GutterMarker, gutterLineClass, lineNumberMarkers, RangeSet,
 	highlightWhitespace, breakpointState, HighlightStyle, syntaxHighlighting, highlightingFor, classHighlighter, tags, EditorState, javascript,
-	readOnlyCompartment, setDiagnostics}
+	readOnlyCompartment, setDiagnostics, getCM, Vim}
 window.createMs = created
 window.viewStart = viewStart
 let waitBackend = () => view.backend ? (window.ready = true) : requestAnimationFrame(waitBackend)

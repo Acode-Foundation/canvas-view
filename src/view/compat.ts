@@ -144,7 +144,11 @@ export const canvasBaseTheme = EditorView.baseTheme({
 		"&:active": {backgroundImage: "linear-gradient(#111, #333)"}},
 	".cm-textfield": {verticalAlign: "middle", color: "inherit", fontSize: "70%", border: "1px solid silver", padding: ".2em .5em"},
 	"&light .cm-textfield": {backgroundColor: "white"},
-	"&dark .cm-textfield": {border: "1px solid #555", backgroundColor: "inherit"}
+	"&dark .cm-textfield": {border: "1px solid #555", backgroundColor: "inherit"},
+	// @replit/codemirror-vim's DOM block cursor: the canvas draws it
+	// (\`cursorStyle\`, following Vim's mode), and DOM can't keep up
+	// with a fling.
+	".cm-vimCursorLayer": {display: "none !important"}
 })
 
 const canvasBaseModule: StyleModule = findProvider(canvasBaseTheme, p => p.value instanceof StyleModule).value

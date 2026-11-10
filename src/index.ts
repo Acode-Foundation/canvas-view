@@ -1,4 +1,4 @@
-export {CanvasView, type CanvasViewConfig, type FrameStat} from "./view/view"
+export {CanvasView, type CanvasViewConfig, type CursorStyle, type CursorBlinking, type FrameStat} from "./view/view"
 export {CanvasTheme, type CanvasThemeSpec, type TokenStyleSpec, darkTheme, lightTheme} from "./view/theme"
 export {computeFling, splinePosition, VelocityTracker} from "./view/spline"
 export type {FontSpec, FontMetrics} from "./core/metrics"

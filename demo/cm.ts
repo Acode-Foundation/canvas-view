@@ -5,6 +5,7 @@ import {javascript} from "@codemirror/lang-javascript"
 import {EditorState, StateEffect, StateField} from "@codemirror/state"
 import {oneDark} from "@codemirror/theme-one-dark"
 import {Decoration, EditorView, highlightActiveLine, highlightActiveLineGutter, lineNumbers, WidgetType} from "@codemirror/view"
+import {vim} from "@replit/codemirror-vim"
 import {type FixtureKind, makeFixture} from "./fixtures"
 import {fontFamily} from "./settings"
 
@@ -19,6 +20,7 @@ let doc = makeFixture(kind, lines)
 let view = new EditorView({
 	parent: document.getElementById("editor")!,
 	state: EditorState.create({doc, extensions: [
+		params.get("vim") == "1" ? vim() : [],
 		lineNumbers(), highlightActiveLine(), highlightActiveLineGutter(), oneDark, font,
 		kind == "html" ? html() : javascript()
 	]})

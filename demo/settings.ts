@@ -99,9 +99,20 @@ export const sections: Section[] = [
 		{key: "cursorWidth", label: "Cursor width", def: "2", choices: [["1", "1px"], ["2", "2px"], ["3", "3px"]],
 			live: (v, x) => v.reconfigure({cursorWidth: +x})},
 		{key: "blink", label: "Cursor blink", def: "1200", choices: [["0", "Off"], ["600", "Fast"], ["1200", "Normal"]],
-			live: (v, x) => v.reconfigure({cursorBlinkRate: +x})}
+			live: (v, x) => v.reconfigure({cursorBlinkRate: +x})},
+		{key: "cursorStyle", label: "Cursor style", def: "line",
+			choices: [["line", "Line"], ["line-thin", "Thin line"], ["block", "Block"], ["block-outline", "Block outline"], ["underline", "Underline"], ["underline-thin", "Thin underline"]],
+			live: (v, x) => v.reconfigure({cursorStyle: x as any})},
+		{key: "cursorBlinking", label: "Cursor blinking", def: "blink",
+			choices: [["blink", "Blink"], ["smooth", "Smooth"], ["phase", "Phase"], ["expand", "Expand"], ["solid", "Solid"]],
+			live: (v, x) => v.reconfigure({cursorBlinking: x as any})},
+		{key: "caretAnim", label: "Smooth caret animation", def: "off", choices: [["off", "Off"], ["explicit", "Explicit moves"], ["on", "On"]],
+			live: (v, x) => v.reconfigure({cursorSmoothCaretAnimation: x as any})},
+		{key: "smoothScroll", label: "Smooth scrolling (keys, commands)", def: "0", choices: onOff,
+			live: (v, x) => v.reconfigure({smoothScrolling: x == "1"})}
 	]},
 	{title: "Editing", settings: [
+		{key: "vim", label: "Vim mode (@replit/codemirror-vim)", def: "0", choices: onOff},
 		{key: "readOnly", label: "Read-only", def: "0", choices: onOff,
 			live: (v, x) => v.dispatch({effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(x == "1"))})},
 		{key: "ext", label: "CodeMirror plugins", def: "full", choices: [["full", "Search, autocomplete, lint, hover, inlay hints"], ["basic", "None (state only)"]]},

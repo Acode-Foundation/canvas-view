@@ -76,7 +76,18 @@ function applyInput(host: InputHost, view: unknown, from: number, to: number, in
 		}
 	}
 	if (insert && !composing && from <= to) {
-		for (let h of state.facet(EditorView.inputHandler)) if (h(view as any, from, to, insert, defaultTr)) return
+		let focused = document.activeElement
+		try {
+			for (let h of state.facet(EditorView.inputHandler)) if (h(view as any, from, to, insert, defaultTr)) return
+		} finally {
+			// @replit/codemirror-vim ends a virtual keyboard's composition
+			// by taking the scroller out of the document and putting it
+			// back, which drops focus without a blur event: the keyboard
+			// would close and the next key go nowhere.
+			if (focused instanceof HTMLElement && document.activeElement != focused && focused.isConnected &&
+				(document.activeElement == document.body || document.activeElement == null))
+				focused.focus({preventScroll: true})
+		}
 	}
 	host.dispatch(makeSpec())
 }
@@ -148,9 +159,18 @@ function attachCommon(host: InputHost, view: unknown, el: HTMLElement, isComposi
 export function inputHandlers(host: InputHost, view: unknown, isComposing: () => boolean) {
 	let onKeyDown = (e: KeyboardEvent) => {
 		host.noteInput(e.timeStamp)
-		if (isComposing() || e.isComposing || e.keyCode == 229) return
-		host.flushTreeSync()
-		if (host.runEventHandlers("keydown", e) || runScopeHandlers(view as any, e, "editor")) {
+		let composing = isComposing() || e.isComposing || e.keyCode == 229
+		if (!composing) host.flushTreeSync()
+		// Like CodeMirror, \`keydown\` handlers see every key, those of
+		// virtual keyboards and IMEs (229, "Unidentified", "Process")
+		// too: @replit/codemirror-vim notes them to read the text that
+		// follows as a command in normal mode. Keymaps don't.
+		if (host.runEventHandlers("keydown", e)) {
+			e.preventDefault()
+			return
+		}
+		if (composing) return
+		if (runScopeHandlers(view as any, e, "editor")) {
 			e.preventDefault()
 			return
 		}

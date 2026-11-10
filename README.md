@@ -127,6 +127,10 @@ run against it unchanged.
 | `highlightActiveLine` | `true` | |
 | `cursorWidth` | `2` | CSS px |
 | `cursorBlinkRate` | `1200` | ms, `0` to disable |
+| `cursorStyle` | `"line"` | `"line-thin"`, `"block"`, `"block-outline"`, `"underline"`, `"underline-thin"`; follows Vim's mode with `@replit/codemirror-vim` |
+| `cursorBlinking` | `"blink"` | `"smooth"`, `"phase"`, `"expand"` (animated) or `"solid"` |
+| `cursorSmoothCaretAnimation` | `"off"` | `"on"`, or `"explicit"` (not while typing): the cursor slides to its new position |
+| `smoothScrolling` | `false` | Animate scrolling from keys and commands (PageDown, go to line, scroll into view) |
 | `readOnlyCursor` | `true` | Steady cursor in non-editable views |
 | `placeholder` | | Shown while the document is empty |
 | `scrollSpeed` | `"normal"` | `"slow"`, `"fast"`, `"fastX2"`, or a multiplier |

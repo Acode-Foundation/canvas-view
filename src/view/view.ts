@@ -64,8 +64,34 @@ export interface CanvasViewConfig {
 	onLineNumberClick?: (line: number, event: Event, view: CanvasView) => boolean
 	/// Highlight the cursor line and its number (default true).
 	highlightActiveLine?: boolean
-	/// Cursor width in CSS px (default 2).
+	/// Cursor width in CSS px (default 2), for the "line" style.
 	cursorWidth?: number
+	/// Cursor shape, like VS Code's `editor.cursorStyle`: "line" (the
+	/// default, `cursorWidth` wide), "line-thin" (1px), "block" (the
+	/// character cell, with the character drawn over it in the
+	/// background color), "block-outline", "underline" or
+	/// "underline-thin". With `@replit/codemirror-vim` the shape follows
+	/// Vim's mode instead: a block in normal and visual mode, a line in
+	/// insert mode, an underline in replace mode.
+	cursorStyle?: CursorStyle
+	/// How the cursor blinks, like VS Code's `editor.cursorBlinking`:
+	/// "blink" (the default: on, off), "smooth" (fades in and out),
+	/// "phase" (on, then a quick fade), "expand" (grows from and
+	/// shrinks to its middle) or "solid" (no blinking). The animated
+	/// ones draw a few frames per blink, and nothing in between.
+	cursorBlinking?: CursorBlinking
+	/// Animate the cursor sliding to its new position, like VS Code's
+	/// `editor.cursorSmoothCaretAnimation`: "off" (the default), "on",
+	/// or "explicit" (only for moves that aren't edits: arrows, clicks,
+	/// commands). Only with one cursor, and not for jumps of more than
+	/// a screen.
+	cursorSmoothCaretAnimation?: "off" | "explicit" | "on"
+	/// Animate scrolling that commands and keys cause (PageDown,
+	/// go-to-line, `EditorView.scrollIntoView`, the cursor leaving the
+	/// screen), like VS Code's `editor.smoothScrolling`. Jumps of more
+	/// than a screen and a half only glide over the last part. Touch,
+	/// wheel and drags stay direct, and stop it. Default false.
+	smoothScrolling?: boolean
 	/// Draw the cursor, without blinking, in a view that can't take
 	/// focus (`EditorView.editable` false, e.g. a read-only file), so a
 	/// tap shows where it went, like VS Code's read-only editors and
@@ -158,6 +184,40 @@ export interface CanvasViewConfig {
 	/// Override how transactions are applied (like CodeMirror's
 	/// `dispatchTransactions`).
 	dispatchTransactions?: (trs: readonly Transaction[], view: CanvasView) => void
+}
+
+/// Cursor shapes (`CanvasViewConfig.cursorStyle`).
+export type CursorStyle = "line" | "line-thin" | "block" | "block-outline" | "underline" | "underline-thin"
+
+/// Cursor blinking modes (`CanvasViewConfig.cursorBlinking`).
+export type CursorBlinking = "blink" | "smooth" | "phase" | "expand" | "solid"
+
+/// Caret slide and smooth scroll durations (VS Code's are 80ms/125ms).
+const CARET_MS = 80
+const SCROLL_MS = 125
+
+const easeOut = (t: number) => 1 - (1 - t) ** 3
+
+/// Cursor visibility (opacity, or height for "expand") at `t` (0..1)
+/// of a blink period, and how long (in periods) until it next changes:
+/// 0 while it's changing. Shapes follow VS Code's keyframes.
+function blinkLevel(mode: CursorBlinking, t: number): {level: number, wait: number} {
+	let ramp = (a: number, b: number, from: number, to: number) => {
+		let u = (t - a) / (b - a), e = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2
+		return from + (to - from) * e
+	}
+	if (mode == "smooth") {
+		// 0-20% on, fading out to 60%, off until 80%, fading in.
+		if (t < 0.2) return {level: 1, wait: 0.2 - t}
+		if (t < 0.6) return {level: ramp(0.2, 0.6, 1, 0), wait: 0}
+		if (t < 0.8) return {level: 0, wait: 0.8 - t}
+		return {level: ramp(0.8, 1, 0, 1), wait: 0}
+	}
+	// phase, expand: on for 40%, a quick change, off until 90%.
+	if (t < 0.4) return {level: 1, wait: 0.4 - t}
+	if (t < 0.5) return {level: ramp(0.4, 0.5, 1, 0), wait: 0}
+	if (t < 0.9) return {level: 0, wait: 0.9 - t}
+	return {level: ramp(0.9, 1, 0, 1), wait: 0}
 }
 
 export interface FrameStat {
@@ -316,6 +376,21 @@ export class CanvasView implements ScrollHost, InputHost {
 	private underRects = new InstanceBuffer(RECT_STRIDE, 64)
 	private overRects = new InstanceBuffer(RECT_STRIDE, 16)
 	private cursorRects = new InstanceBuffer(RECT_STRIDE, 4)
+	/// Characters under block cursors, in the background color.
+	private cursorGlyphs = new InstanceBuffer(GLYPH_STRIDE, 4)
+	/// The cursor instances as built, before blink levels scale them.
+	private cursorBase = {rects: new Uint32Array(0), glyphs: new Uint32Array(0), level: 1}
+	/// Where the main cursor was drawn (content px), and its slide.
+	private caretAt: {x: number, y: number} | null = null
+	private caretAnim: {dx: number, dy: number, start: number} | null = null
+	private caretOffset = {x: 0, y: 0}
+	/// The transactions since the last cursor build changed the document.
+	private caretEdited = false
+	/// Start of the current blink period (animated blinking).
+	private blinkStart = 0
+	/// A smooth scroll in progress (`smoothScrolling`).
+	private scrollAnim: {fromTop: number, toTop: number, fromLeft: number, toLeft: number, start: number} | null = null
+	private scrollAnimating = false
 	private handleGlyphs = new InstanceBuffer(GLYPH_STRIDE, 4)
 	private gutterRects = new InstanceBuffer(RECT_STRIDE, 16)
 	private dynGlyphs = new InstanceBuffer(GLYPH_STRIDE, 64)
@@ -723,6 +798,9 @@ export class CanvasView implements ScrollHost, InputHost {
 
 	get scrollTop() { return this.top }
 	set scrollTop(v: number) {
+		// Any other scroll (touch, wheel, the app) takes over from a
+		// smooth scroll.
+		if (!this.scrollAnimating) this.scrollAnim = null
 		let next = Math.max(0, Math.min(this.maxScrollTop, v))
 		if (next != this.top) {
 			this.top = next
@@ -732,6 +810,7 @@ export class CanvasView implements ScrollHost, InputHost {
 
 	get scrollLeft() { return this.left }
 	set scrollLeft(v: number) {
+		if (!this.scrollAnimating) this.scrollAnim = null
 		let next = Math.max(0, Math.min(this.maxScrollLeft, v))
 		if (next != this.left) {
 			this.left = next
@@ -865,10 +944,13 @@ export class CanvasView implements ScrollHost, InputHost {
 			let rainbow = this.rainbowState, pub = rainbow && this.syntax.canonicalTree(this.state.doc)
 			rainbow?.mapEdit(vu.changes, startState.doc, this.state.doc, pub?.tree ?? null, pub?.len ?? 0)
 		}
+		// Pointer selections scroll at once (the pointer is there).
+		let smooth = !trs.some(tr => tr.isUserEvent("select.pointer"))
 		for (let target of scrollTargets) {
-			if (typeof target == "number") this.scrollPosIntoView(target)
-			else this.applyScrollTarget(target as any)
+			if (typeof target == "number") this.scrollPosIntoView(target, this.lineHeight, smooth)
+			else this.applyScrollTarget(target as any, smooth)
 		}
+		if (vu.docChanged) this.caretEdited = true
 		if (trs.length) {
 			this.input.update(trs, startState)
 			this.touchSelection.onUpdate(trs)
@@ -925,14 +1007,60 @@ export class CanvasView implements ScrollHost, InputHost {
 	}
 
 	/// Handle CodeMirror `EditorView.scrollIntoView` effects.
-	private applyScrollTarget(target: {range: SelectionRange, y: string, yMargin: number, x: string, xMargin: number}) {
+	private applyScrollTarget(target: {range: SelectionRange, y: string, yMargin: number, x: string, xMargin: number}, smooth = false) {
 		this.measureAround(target.range.head)
 		let {row} = this.posCoords(target.range.head)
 		let top = this.rowTop(row), lh = this.lineHeight
-		if (target.y == "start") this.scrollTop = top - target.yMargin
-		else if (target.y == "end") this.scrollTop = top + lh + target.yMargin - this.visibleHeight
-		else if (target.y == "center") this.scrollTop = top + lh / 2 - this.visibleHeight / 2
-		else this.scrollPosIntoView(target.range.head, Math.max(lh, target.yMargin))
+		if (target.y == "start") this.scrollTo(top - target.yMargin, null, smooth)
+		else if (target.y == "end") this.scrollTo(top + lh + target.yMargin - this.visibleHeight, null, smooth)
+		else if (target.y == "center") this.scrollTo(top + lh / 2 - this.visibleHeight / 2, null, smooth)
+		else this.scrollPosIntoView(target.range.head, Math.max(lh, target.yMargin), smooth)
+	}
+
+	/// Where scrolling is headed: a smooth scroll's target, or here.
+	private get destTop() { return this.scrollAnim ? this.scrollAnim.toTop : this.top }
+	private get destLeft() { return this.scrollAnim ? this.scrollAnim.toLeft : this.left }
+
+	/// Scroll to `top`/`left` (null keeps the axis' destination), with
+	/// `smooth` and the `smoothScrolling` option over SCROLL_MS. Long
+	/// jumps go most of the way at once and glide over the last screen
+	/// and a half, so a go-to-line doesn't draw every screen between.
+	private scrollTo(top: number | null, left: number | null, smooth: boolean) {
+		if (!smooth || !this.config.smoothScrolling) {
+			if (top != null) this.scrollTop = top
+			if (left != null) this.scrollLeft = left
+			return
+		}
+		let toTop = Math.max(0, Math.min(this.maxScrollTop, top ?? this.destTop))
+		let toLeft = Math.max(0, Math.min(this.maxScrollLeft, left ?? this.destLeft))
+		let fromTop = this.top, fromLeft = this.left
+		let spanY = this.visibleHeight * 1.5, spanX = (this.width - this.contentLeft) * 1.5
+		if (Math.abs(toTop - fromTop) > spanY) fromTop = toTop - Math.sign(toTop - fromTop) * spanY
+		if (Math.abs(toLeft - fromLeft) > spanX) fromLeft = toLeft - Math.sign(toLeft - fromLeft) * spanX
+		if (toTop == this.top && toLeft == this.left) {
+			this.scrollAnim = null
+			return
+		}
+		this.scrollAnimating = true
+		this.scrollTop = fromTop
+		this.scrollLeft = fromLeft
+		this.scrollAnimating = false
+		this.scrollAnim = {fromTop, toTop, fromLeft, toLeft, start: performance.now()}
+		this.requestFrame()
+	}
+
+	/// Advance a smooth scroll; true while it runs.
+	private stepScrollAnim(now: number) {
+		let a = this.scrollAnim
+		if (!a) return false
+		let t = Math.min(1, (now - a.start) / SCROLL_MS), e = easeOut(t)
+		this.scrollAnimating = true
+		this.scrollTop = a.fromTop + (a.toTop - a.fromTop) * e
+		this.scrollLeft = a.fromLeft + (a.toLeft - a.fromLeft) * e
+		this.scrollAnimating = false
+		if (t < 1) return true
+		this.scrollAnim = null
+		return false
 	}
 
 	setState(state: EditorState) {
@@ -1001,17 +1129,19 @@ export class CanvasView implements ScrollHost, InputHost {
 		this.lines.measure(n - 50, n + 50, n)
 	}
 
-	scrollPosIntoView(pos: number, margin = this.lineHeight) {
+	scrollPosIntoView(pos: number, margin = this.lineHeight, smooth = false) {
 		this.measureAround(pos)
 		let {row, x} = this.posCoords(pos)
 		// Sticky lines cover the top: keep the line below them.
 		let y = this.rowTop(row), above = margin + this.stickyInset(pos)
-		if (y - above < this.top) this.scrollTop = y - above
-		else if (y + this.lineHeight + margin > this.top + this.visibleHeight) this.scrollTop = y + this.lineHeight + margin - this.visibleHeight
+		let top = this.destTop, left = this.destLeft, toTop: number | null = null, toLeft: number | null = null
+		if (y - above < top) toTop = y - above
+		else if (y + this.lineHeight + margin > top + this.visibleHeight) toTop = y + this.lineHeight + margin - this.visibleHeight
 		let px = x * this.cellWidth
 		let room = this.width - this.contentLeft
-		if (px - this.cellWidth * 4 < this.left) this.scrollLeft = px - this.cellWidth * 4
-		else if (px + this.cellWidth * 4 > this.left + room) this.scrollLeft = px + this.cellWidth * 4 - room
+		if (px - this.cellWidth * 4 < left) toLeft = px - this.cellWidth * 4
+		else if (px + this.cellWidth * 4 > left + room) toLeft = px + this.cellWidth * 4 - room
+		if (toTop != null || toLeft != null) this.scrollTo(toTop, toLeft, smooth)
 	}
 
 	// ---- Input hooks --------------------------------------------------------
@@ -1506,7 +1636,7 @@ export class CanvasView implements ScrollHost, InputHost {
 	reconfigure(options: Pick<CanvasViewConfig, "scrollSpeed" | "scrollPastEnd" | "horizontalScrollPastEnd" | "foldMarkers" |
 		"wrapIndent" | "lineWrapping" | "textDirection" | "indentGuides" | "lineNumbers" | "cursorBlinkRate" | "highlightActiveLine" | "cursorWidth" |
 		"placeholder" | "showWhitespace" | "onLineNumberClick" | "rainbowBrackets" | "gutterMarkers" | "readOnlyCursor" | "stickyScroll" |
-		"fontLigatures" | "nativeContextMenu">) {
+		"fontLigatures" | "nativeContextMenu" | "cursorStyle" | "cursorBlinking" | "cursorSmoothCaretAnimation" | "smoothScrolling">) {
 		Object.assign(this.config, options)
 		if ("fontLigatures" in options) this.syncLigatures()
 		if ("readOnlyCursor" in options) this.syncWritable()
@@ -1514,7 +1644,8 @@ export class CanvasView implements ScrollHost, InputHost {
 			this.lineNumbers = (options.lineNumbers ?? true) !== false
 			this.relativeNumbers = options.lineNumbers == "relative"
 		}
-		if ("cursorBlinkRate" in options) this.restartBlink()
+		if ("cursorBlinkRate" in options || "cursorBlinking" in options) this.restartBlink()
+		if ("smoothScrolling" in options && !options.smoothScrolling) this.scrollAnim = null
 		if ("scrollPastEnd" in options) {
 			let past = options.scrollPastEnd ?? true
 			this.scrollPastEnd = past === true ? 1 : past === false ? 0 : Math.max(0, Math.min(1, past))
@@ -1613,8 +1744,11 @@ export class CanvasView implements ScrollHost, InputHost {
 		if (this.blinkTimer != null) clearTimeout(this.blinkTimer)
 		this.blinkTimer = null
 		this.cursorOn = true
-		let rate = this.config.cursorBlinkRate ?? 1200
-		if (!this.focused || rate <= 0) return
+		this.blinkStart = performance.now()
+		let rate = this.config.cursorBlinkRate ?? 1200, mode = this.config.cursorBlinking ?? "blink"
+		if (!this.focused || rate <= 0 || mode == "solid") return
+		// Animated modes are driven by `stepBlink` from the frames.
+		if (mode != "blink") return this.requestFrame()
 		let tick = () => {
 			this.cursorOn = !this.cursorOn
 			this.requestFrame()
@@ -1930,7 +2064,8 @@ export class CanvasView implements ScrollHost, InputHost {
 			this.resetStyles()
 		}
 		let start = performance.now()
-		let animating = this.scroller.step(time)
+		let animating = this.stepScrollAnim(start)
+		animating = this.scroller.step(time) || animating
 		this.prepareRows()
 		let t0a = performance.now()
 		// Plugins see the new viewport in a task of their own after this
@@ -1947,6 +2082,8 @@ export class CanvasView implements ScrollHost, InputHost {
 			this.dynKey = []
 			animating = true
 		}
+		if (this.stepCaret(start)) animating = true
+		this.stepBlink(start)
 		let uploads = this.atlas.uploadedTexels
 		this.backend.syncAtlas(this.atlas)
 		let t3 = performance.now()
@@ -2556,6 +2693,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		let key = [this.state.selection, this.state.doc, this.scene.origin, w.first, w.last, this.theme, this.metrics, this.width,
 			this.atlas.generation, this.composition, this.touchSelection.version, this.lines.version, foldedRanges(this.state), this.focused,
 			this.gutterHover, syntaxTree(this.state), this.config.placeholder, this.config.highlightActiveLine, this.config.cursorWidth,
+			this.config.cursorStyle, ...this.vimKey(),
 			this.relativeNumbers, this.dropPos, ...this.markerKey()]
 		if (key.some((v, i) => v !== this.dynKey[i])) {
 			this.dynKey = key
@@ -2668,19 +2806,32 @@ export class CanvasView implements ScrollHost, InputHost {
 				pushRect(under, x1 * cw, rowY(row), (x2 - x1) * cw, lh, t.selection))
 		}
 
-		let cursors = this.cursorRects
-		cursors.reset()
+		this.cursorRects.reset()
+		this.cursorGlyphs.reset()
 		// A touch selection shows its handles and no cursor, like native
 		// Android fields and sora-editor (mouse and keyboard selections
 		// keep CodeMirror's cursor at the head).
 		let touchSelection = this.touchSelection.mode == "selection"
+		let vim = this.vimCursor(), shape = vim?.shape ?? this.config.cursorStyle ?? "line"
+		let mainAt: {x: number, y: number} | null = null
 		for (let range of sel.ranges) {
 			if (touchSelection && !range.empty) continue
-			let {row, x} = this.posCoords(range.head, range.assoc)
+			let head = range.head, assoc = range.assoc, main = range == sel.main
+			if (vim) {
+				if (vim.visualBlock && !main) continue
+				// Vim's block sits on the last selected character.
+				if (range.anchor < head && shape != "line" && doc.sliceString(head - 1, head) != "\n") { head--; assoc = 1 }
+			}
+			let {row, x} = this.posCoords(head, assoc)
 			if (row < first || row > last) continue
-			let cwidth = Math.max(1, Math.min(10, this.config.cursorWidth ?? 2))
-			pushRect(cursors, x * cw - cwidth / 2, rowY(row), cwidth, lh, t.cursor)
+			if (main) mainAt = {x: x * cw, y: this.rowTop(row)}
+			this.pushCursor(shape, head, row, x, rowY(row))
 		}
+		this.noteCaret(mainAt, sel.ranges.length == 1)
+		let base = this.cursorBase
+		base.rects = this.cursorRects.u32.slice(0, this.cursorRects.count * RECT_STRIDE)
+		base.glyphs = this.cursorGlyphs.u32.slice(0, this.cursorGlyphs.count * GLYPH_STRIDE)
+		base.level = 1
 		// Drop position of dragged text (in the "over" pass: drawn while
 		// blurred and blinking too).
 		if (this.dropPos != null) {
@@ -2809,6 +2960,138 @@ export class CanvasView implements ScrollHost, InputHost {
 				}
 			}
 		}
+	}
+
+	/// Draw one cursor of `shape` at `head` (row `row`, column `x`,
+	/// row top `y` in scene coordinates).
+	private pushCursor(shape: CursorStyle, head: number, row: number, x: number, y: number) {
+		let t = this.theme, cw = this.cellWidth, lh = this.lineHeight, px = x * cw
+		if (shape == "line" || shape == "line-thin") {
+			let w = shape == "line-thin" ? 1 : Math.max(1, Math.min(10, this.config.cursorWidth ?? 2))
+			pushRect(this.cursorRects, px - w / 2, y, w, lh, t.cursor)
+			return
+		}
+		// The character cell: as wide as the character's cluster on this
+		// row (CJK, emoji and tabs are wider), one cell at the line end.
+		let line = this.state.doc.lineAt(head), left = px, w = cw, ch = ""
+		if (head < line.to) {
+			let next = line.from + findClusterBreak(line.text, head - line.from)
+			let end = this.posCoords(next, -1)
+			if (end.row == row && end.x != x) {
+				left = Math.min(end.x, x) * cw
+				w = Math.abs(end.x - x) * cw
+			}
+			ch = line.text.slice(head - line.from, next - line.from)
+		}
+		if (shape == "block") {
+			pushRect(this.cursorRects, left, y, w, lh, t.cursor)
+			// The character over it in the background color, like
+			// VS Code's and Vim's block cursors.
+			if (ch && ch.trim() && ch.charCodeAt(0) >= 32 && !rtlChars.test(ch)) {
+				let g = this.atlas.glyph(0, ch)
+				if (g.w) pushGlyph(this.cursorGlyphs, left + g.ox, y + g.oy, g, t.background)
+			}
+		} else if (shape == "block-outline") {
+			pushRect(this.cursorRects, left, y, w, 1, t.cursor)
+			pushRect(this.cursorRects, left, y + lh - 1, w, 1, t.cursor)
+			pushRect(this.cursorRects, left, y + 1, 1, lh - 2, t.cursor)
+			pushRect(this.cursorRects, left + w - 1, y + 1, 1, lh - 2, t.cursor)
+		} else {
+			let h = shape == "underline-thin" ? 1 : 2
+			pushRect(this.cursorRects, left, y + lh - h, w, h, t.cursor)
+		}
+	}
+
+	/// Vim's mode, for the selection layers' key: it changes on keys
+	/// that dispatch nothing (Vim then asks for a measure, which draws).
+	private vimKey() {
+		let cm = (this as any).cm, vim = cm?.state?.vim
+		return vim ? [vim.insertMode, vim.visualMode, vim.visualBlock, cm.state.overwrite] : []
+	}
+
+	/// The cursor shape `@replit/codemirror-vim` wants (it sets
+	/// `view.cm` to its CodeMirror 5 adapter), or null without Vim. Its
+	/// own block cursor is DOM measured after updates, which can't
+	/// follow a canvas fling; it's hidden (base theme) and drawn here.
+	private vimCursor(): {shape: CursorStyle, visualBlock: boolean} | null {
+		let cm = (this as any).cm, vim = cm?.state?.vim
+		if (!vim) return null
+		let shape: CursorStyle = cm.state.overwrite ? "underline" : vim.insertMode ? "line" : "block"
+		return {shape, visualBlock: !!vim.visualBlock}
+	}
+
+	/// Start the caret's slide (`cursorSmoothCaretAnimation`) when the
+	/// main cursor was drawn somewhere else, from where it is drawn now.
+	private noteCaret(at: {x: number, y: number} | null, single: boolean) {
+		let mode = this.config.cursorSmoothCaretAnimation ?? "off", prev = this.caretAt
+		let edited = this.caretEdited
+		this.caretEdited = false
+		this.caretAt = at
+		if (!at || !prev || (prev.x == at.x && prev.y == at.y)) return
+		if (mode == "off" || !single || mode == "explicit" && edited || !this.focused ||
+			Math.abs(prev.y - at.y) > this.visibleHeight) {
+			this.caretAnim = null
+			this.caretOffset.x = this.caretOffset.y = 0
+			return
+		}
+		this.caretAnim = {dx: prev.x + this.caretOffset.x - at.x, dy: prev.y + this.caretOffset.y - at.y, start: performance.now()}
+		this.requestFrame()
+	}
+
+	/// The caret slide's offset at `now` (a pass offset: nothing is
+	/// rebuilt or uploaded). True while it runs.
+	private stepCaret(now: number) {
+		let a = this.caretAnim, o = this.caretOffset
+		if (!a) return false
+		let t = (now - a.start) / CARET_MS
+		if (t >= 1) {
+			this.caretAnim = null
+			o.x = o.y = 0
+			return false
+		}
+		let k = 1 - easeOut(Math.max(0, t))
+		o.x = a.dx * k
+		o.y = a.dy * k
+		return true
+	}
+
+	/// Animated blinking (`cursorBlinking` smooth/phase/expand): scale
+	/// the cursor instances' alpha (or height) to the blink level. Only
+	/// frames during a fade do this; in between, a timer waits for the
+	/// next one.
+	private stepBlink(now: number) {
+		let mode = this.config.cursorBlinking ?? "blink", rate = this.config.cursorBlinkRate ?? 1200
+		let level = 1
+		if (mode != "blink" && mode != "solid" && rate > 0 && this.focused) {
+			let b = blinkLevel(mode, ((now - this.blinkStart) % rate) / rate)
+			level = b.level
+			if (this.blinkTimer != null) clearTimeout(this.blinkTimer)
+			this.blinkTimer = null
+			if (b.wait > 0) this.blinkTimer = setTimeout(() => { this.blinkTimer = null; this.requestFrame() }, b.wait * rate)
+			else this.requestFrame()
+		}
+		let base = this.cursorBase
+		if (level == base.level) return
+		base.level = level
+		let expand = mode == "expand"
+		let rects = this.cursorRects, f = rects.f32, u = rects.u32
+		for (let i = 0; i < rects.count; i++) {
+			let at = i * RECT_STRIDE, c = base.rects[at + 4]
+			if (expand) {
+				let y = new Float32Array(base.rects.buffer, at * 4, 4)
+				f[at + 1] = y[1] + y[3] * (1 - level) / 2
+				f[at + 3] = y[3] * level
+			} else {
+				u[at + 4] = (c & 0xffffff) | Math.round((c >>> 24) * level) << 24
+			}
+		}
+		rects.touch(0)
+		let glyphs = this.cursorGlyphs
+		for (let i = 0; i < glyphs.count; i++) {
+			let at = i * GLYPH_STRIDE + 4, c = base.glyphs[at]
+			glyphs.u32[at] = (c & 0xffffff) | Math.round((c >>> 24) * (expand ? (level > 0.5 ? 1 : 0) : level)) << 24
+		}
+		glyphs.touch(0)
 	}
 
 	/// The placeholder text while the document is empty.
@@ -3141,9 +3424,12 @@ export class CanvasView implements ScrollHost, InputHost {
 		put("glyph", scene.glyphs, textX, sceneY, content)
 		put("glyph", this.placeholderGlyphs, textX, sceneY, content)
 		put("rect", this.overRects, textX, sceneY, content)
-		put("rect", this.cursorRects, textX, sceneY, content)
+		let caret = this.caretOffset, hidden = this.focused ? !this.cursorOn : !this.steadyCursor
+		put("rect", this.cursorRects, textX + caret.x, sceneY + caret.y, content)
 		// Blink and blur hide the cursor without rebuilding anything.
-		if (this.focused ? !this.cursorOn : !this.steadyCursor) p[i - 1].count = 0
+		if (hidden) p[i - 1].count = 0
+		put("glyph", this.cursorGlyphs, textX + caret.x, sceneY + caret.y, content)
+		if (hidden) p[i - 1].count = 0
 		if (gw) {
 			put("rect", this.gutterRects, 0, sceneY, gutter)
 			put("glyph", scene.gutter, 0, sceneY, gutter)

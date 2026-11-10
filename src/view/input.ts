@@ -120,6 +120,32 @@ export function clipboardFilter(state: EditorState, kind: "input" | "output", te
 /// through CodeMirror's keymap engine (the `keymap` facet), so
 /// `@codemirror/commands` keymaps work unchanged.
 function attachCommon(host: InputHost, view: unknown, el: HTMLElement, isComposing: () => boolean) {
+	let {onKeyDown, onCopy, onPaste} = inputHandlers(host, view, isComposing)
+	// For key observers (`crosshairCursor`).
+	let onKeyUp = (e: KeyboardEvent) => { host.runEventHandlers("keyup", e) }
+	let onFocus = () => host.onFocusChange(true)
+	let onBlur = () => host.onFocusChange(false)
+	el.addEventListener("keydown", onKeyDown)
+	el.addEventListener("keyup", onKeyUp)
+	el.addEventListener("copy", onCopy)
+	el.addEventListener("cut", onCopy)
+	el.addEventListener("paste", onPaste)
+	el.addEventListener("focus", onFocus)
+	el.addEventListener("blur", onBlur)
+	return () => {
+		el.removeEventListener("keydown", onKeyDown)
+		el.removeEventListener("keyup", onKeyUp)
+		el.removeEventListener("copy", onCopy)
+		el.removeEventListener("cut", onCopy)
+		el.removeEventListener("paste", onPaste)
+		el.removeEventListener("focus", onFocus)
+		el.removeEventListener("blur", onBlur)
+	}
+}
+
+/// The key and clipboard event handlers of the input element, also
+/// used by the context menu's stand-in element (`contextmenu.ts`).
+export function inputHandlers(host: InputHost, view: unknown, isComposing: () => boolean) {
 	let onKeyDown = (e: KeyboardEvent) => {
 		host.noteInput(e.timeStamp)
 		if (isComposing() || e.isComposing || e.keyCode == 229) return
@@ -170,26 +196,7 @@ function attachCommon(host: InputHost, view: unknown, el: HTMLElement, isComposi
 		text = clipboardFilter(host.state, "input", text).replace(/\r\n?/g, "\n")
 		host.dispatch({...host.state.replaceSelection(host.state.toText(text)), userEvent: "input.paste", scrollIntoView: true})
 	}
-	// For key observers (`crosshairCursor`).
-	let onKeyUp = (e: KeyboardEvent) => { host.runEventHandlers("keyup", e) }
-	let onFocus = () => host.onFocusChange(true)
-	let onBlur = () => host.onFocusChange(false)
-	el.addEventListener("keydown", onKeyDown)
-	el.addEventListener("keyup", onKeyUp)
-	el.addEventListener("copy", onCopy)
-	el.addEventListener("cut", onCopy)
-	el.addEventListener("paste", onPaste)
-	el.addEventListener("focus", onFocus)
-	el.addEventListener("blur", onBlur)
-	return () => {
-		el.removeEventListener("keydown", onKeyDown)
-		el.removeEventListener("keyup", onKeyUp)
-		el.removeEventListener("copy", onCopy)
-		el.removeEventListener("cut", onCopy)
-		el.removeEventListener("paste", onPaste)
-		el.removeEventListener("focus", onFocus)
-		el.removeEventListener("blur", onBlur)
-	}
+	return {onKeyDown, onCopy, onPaste}
 }
 
 function styleInputElement(el: HTMLElement) {

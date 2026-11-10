@@ -4,7 +4,7 @@
 // crosshairCursor, native drag-and-drop (move, copy, drop cursor,
 // drops from outside) and typing at several cursors.
 //
-//   node test/browser/mouse.mjs [--backend=webgl2|webgpu]
+//   node test/browser/mouse.mjs [--backend=webgl2|webgpu] [--input=auto|editcontext|textarea]
 
 import {launch, parseArgs, serveDemo, sleep} from "../../bench/harness.mjs"
 
@@ -22,7 +22,7 @@ function check(name, ok, detail = "") {
 
 const page = await browser.newPage()
 await page.setViewport({width: 900, height: 600, deviceScaleFactor: 2})
-await page.goto(`${server.url}/index.html?kind=js&lines=200&backend=${backend}&bare=1&ext=full`)
+await page.goto(`${server.url}/index.html?kind=js&lines=200&backend=${backend}&bare=1&ext=full&input=${args.input ?? "auto"}`)
 await page.waitForFunction("window.ready === true")
 await sleep(300)
 const frames = () => page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))))
@@ -313,6 +313,132 @@ await reset()
 	r = await ranges()
 	check("atomic: a drag selection grows over the range it ends in", r.length == 1 && r[0][0] == 0 && r[0][1] == beta + 4, JSON.stringify(r))
 	await page.evaluate(() => { window.atoms = [] })
+}
+
+// Context menu: a right press puts a stand-in textarea holding the
+// selected text under the pointer, so the browser shows its editing
+// menu; its commands come back as clipboard events.
+await reset()
+{
+	await page.evaluate(() => {
+		window.menuEvents = []
+		window.copied = null
+		window.addEventListener("contextmenu", e => window.menuEvents.push({prevented: e.defaultPrevented, menu: e.target.className == "cv-menu-input"}))
+		window.addEventListener("copy", e => { window.copied = e.clipboardData.getData("text/plain") })
+		window.addEventListener("cut", e => { window.copied = e.clipboardData.getData("text/plain") })
+	})
+	const menuState = () => page.evaluate(() => {
+		let el = document.activeElement
+		return {
+			menu: el.className == "cv-menu-input",
+			selected: el.className == "cv-menu-input" ? el.value.slice(el.selectionStart, el.selectionEnd) : null,
+			readOnly: el.readOnly ?? null,
+			input: el == view.contentDOM,
+			hasFocus: view.hasFocus,
+			last: window.menuEvents[window.menuEvents.length - 1] ?? null
+		}
+	})
+	const rightClick = async p => { await page.mouse.click(p.x, p.y, {button: "right"}); await frames() }
+	const blurs = () => page.evaluate(() => window.focusLog.filter(f => !f).length)
+	await page.evaluate(() => {
+		window.focusLog = []
+		view.dispatch({effects: cmApi.StateEffect.appendConfig.of(cmApi.EditorView.updateListener.of(u => { if (u.focusChanged) window.focusLog.push(u.view.hasFocus) }))})
+	})
+	let beta = await posOf(1, "beta"), two = await posOf(2, "two")
+	await click(await at(0, 0.1))
+	await page.evaluate(b => view.dispatch({selection: {anchor: b, head: b + 4}}), beta)
+	await rightClick(await at(beta + 2))
+	let m = await menuState()
+	check("context menu: a right-click isn't cancelled and hits the stand-in", m.last && !m.last.prevented && m.last.menu, JSON.stringify(m))
+	check("context menu: the stand-in holds the selected text, selected", m.menu && m.selected == "beta" && m.readOnly === false, JSON.stringify(m))
+	check("context menu: a right-click inside the selection keeps it", JSON.stringify(await ranges()) == JSON.stringify([[beta, beta + 4]]), JSON.stringify(await ranges()))
+	check("context menu: the view keeps focus while it's open", m.hasFocus && await blurs() == 0, JSON.stringify(m))
+	await page.evaluate(() => document.execCommand("copy"))
+	await frames()
+	m = await menuState()
+	check("context menu: Copy copies the selection", await page.evaluate(() => window.copied) == "beta", JSON.stringify(await page.evaluate(() => window.copied)))
+	check("context menu: focus goes back to the input after Copy", m.input && await blurs() == 0, JSON.stringify(m))
+
+	await rightClick(await at(two, 0.1))
+	check("context menu: a right-click outside the selection moves the cursor", JSON.stringify(await ranges()) == JSON.stringify([[two, two]]), JSON.stringify(await ranges()))
+	m = await menuState()
+	check("context menu: with an empty selection the stand-in selects nothing", m.menu && m.selected == "", JSON.stringify(m))
+	await page.evaluate(() => {
+		let dt = new DataTransfer()
+		dt.setData("text/plain", "PASTED ")
+		document.activeElement.dispatchEvent(new ClipboardEvent("paste", {clipboardData: dt, bubbles: true, cancelable: true}))
+	})
+	await frames()
+	check("context menu: Paste inserts at the cursor", await lineText(2) == "one PASTED two three", await lineText(2))
+	check("context menu: focus goes back to the input after Paste", (await menuState()).input)
+
+	await reset()
+	await click(await at(0, 0.1))
+	await page.evaluate(b => view.dispatch({selection: {anchor: b, head: b + 5}}), beta)
+	await rightClick(await at(beta + 1))
+	await page.evaluate(() => document.execCommand("cut"))
+	await frames()
+	check("context menu: Cut removes the selection", await lineText(1) == "alpha gamma" && await page.evaluate(() => window.copied) == "beta ",
+		JSON.stringify([await lineText(1), await page.evaluate(() => window.copied)]))
+
+	await rightClick(await at(0, 0.1))
+	await page.evaluate(() => document.execCommand("selectAll"))
+	await sleep(50)
+	await frames()
+	let r = await ranges(), len = await page.evaluate(() => view.state.doc.length)
+	check("context menu: Select all selects the document", r.length == 1 && Math.min(...r[0]) == 0 && Math.max(...r[0]) == len, JSON.stringify(r))
+	check("context menu: focus goes back to the input after Select all", (await menuState()).input)
+
+	await reset()
+	await click(await at(beta, 0.1))
+	await rightClick(await at(two, 0.1))
+	await page.keyboard.type("Z")
+	await frames()
+	m = await menuState()
+	check("context menu: typing after dismissing it goes to the editor", await lineText(2) == "one Ztwo three" && m.input, JSON.stringify([await lineText(2), m]))
+	check("context menu: no blur was reported through all of it", await blurs() == 0, JSON.stringify(await page.evaluate(() => window.focusLog)))
+
+	await page.evaluate(() => view.dispatch({effects: cmApi.readOnlyCompartment.reconfigure(cmApi.EditorState.readOnly.of(true))}))
+	await page.evaluate(b => view.dispatch({selection: {anchor: b, head: b + 4}}), beta)
+	await rightClick(await at(beta + 1))
+	m = await menuState()
+	check("context menu: read-only offers no editing (stand-in read-only)", m.menu && m.readOnly === true && m.selected == "beta", JSON.stringify(m))
+	await click(await at(0, 0.1))
+	check("context menu: a click closes it and refocuses the editor", (await menuState()).input)
+	await page.evaluate(() => view.dispatch({effects: cmApi.readOnlyCompartment.reconfigure([])}))
+
+	await reset()
+	await page.evaluate(() => {
+		window.customMenu = 0
+		view.dispatch({effects: cmApi.StateEffect.appendConfig.of(cmApi.EditorView.domEventHandlers({contextmenu: () => { window.customMenu++; return true }}))})
+	})
+	await rightClick(await at(beta))
+	m = await menuState()
+	check("context menu: a domEventHandlers handler takes it over", await page.evaluate(() => window.customMenu) == 1 && m.last.prevented && !m.menu,
+		JSON.stringify([m, await page.evaluate(() => window.customMenu)]))
+	check("context menu: focus stays in the editor after a handled menu", m.input)
+}
+// Without the native menu, a right-click is cancelled (and handlers above still run).
+await page.reload()
+await page.waitForFunction("window.ready === true")
+await sleep(300)
+{
+	await page.evaluate(() => {
+		window.menuEvents = []
+		window.addEventListener("contextmenu", e => window.menuEvents.push({prevented: e.defaultPrevented, menu: e.target.className == "cv-menu-input"}))
+		view.reconfigure({nativeContextMenu: false})
+	})
+	let p = await at(5)
+	await page.mouse.click(p.x, p.y, {button: "right"})
+	await frames()
+	let last = await page.evaluate(() => window.menuEvents.at(-1))
+	check("context menu: nativeContextMenu: false cancels it", last && last.prevented && !last.menu, JSON.stringify(last))
+	await page.evaluate(() => view.reconfigure({nativeContextMenu: true}))
+	let g = await page.evaluate(() => { let r = view.scrollDOM.getBoundingClientRect(); return {x: r.left + 4, y: r.top + 30} })
+	await page.mouse.click(g.x, g.y, {button: "right"})
+	await frames()
+	last = await page.evaluate(() => window.menuEvents.at(-1))
+	check("context menu: none over the gutter", last && last.prevented && !last.menu, JSON.stringify(last))
 }
 
 await page.close()

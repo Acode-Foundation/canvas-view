@@ -29,8 +29,9 @@ import {type LineRuns, SyntaxDriver} from "./syntax"
 import {CanvasTheme, type CanvasThemeSpec, darkTheme} from "./theme"
 import {ClassStyleReader, sameHighlighters, stateHighlighters} from "./highlight"
 import type {Highlighter} from "@lezer/highlight"
-import {TouchSelection, type TouchSelectionConfig} from "./touchselect"
+import {TouchSelection, type TouchSelectionConfig, mac} from "./touchselect"
 import {Magnifier} from "./magnifier"
+import {NativeContextMenu} from "./contextmenu"
 
 export interface CanvasViewConfig {
 	parent?: HTMLElement
@@ -145,6 +146,15 @@ export interface CanvasViewConfig {
 	/// Touch selection: handle size, timing, and the hooks for the
 	/// consumer's selection menu and haptics.
 	touchSelection?: TouchSelectionConfig
+	/// Show the browser's context menu (Cut, Copy, Paste, Select all)
+	/// on a mouse right-click in the text, like a DOM editor's. A right
+	/// press outside the selection moves the cursor there first, like
+	/// VS Code. `EditorView.domEventHandlers({contextmenu})` handlers
+	/// run first and can show their own menu instead (return true or
+	/// call `preventDefault`). Touch long presses never open it: they
+	/// select, and `touchSelection.onMenu` drives the app's menu.
+	/// Default true.
+	nativeContextMenu?: boolean
 	/// Override how transactions are applied (like CodeMirror's
 	/// `dispatchTransactions`).
 	dispatchTransactions?: (trs: readonly Transaction[], view: CanvasView) => void
@@ -419,6 +429,11 @@ export class CanvasView implements ScrollHost, InputHost {
 		this.scroller = new ScrollController(this)
 		this.computeMaxCols()
 		this.input = createInput(this, config.input)
+		this.contextMenu = new NativeContextMenu(this, this, {
+			writable: () => this.editable && !this.state.readOnly,
+			focus: () => this.focus(),
+			holdFocus: hold => this.holdFocus(hold)
+		})
 		for (let el of [this.dom, this.scrollDOM, this.input.element]) domViews.set(el, this)
 		this.touchSelection = new TouchSelection(this, config.touchSelection)
 		this.plugins = new PluginHost(this)
@@ -455,8 +470,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		// Taps generate compatibility mouse events afterwards; their
 		// default action would move focus off the input element.
 		this.scrollDOM.addEventListener("mousedown", this.preventFocusLoss)
-		// Long presses are handled here; no native context menu.
-		this.scrollDOM.addEventListener("contextmenu", this.preventContextMenu)
+		this.scrollDOM.addEventListener("contextmenu", this.onContextMenu)
 		this.scrollDOM.addEventListener("pointermove", this.onPointerHover)
 		this.scrollDOM.addEventListener("pointerleave", this.onPointerHover)
 
@@ -1342,7 +1356,32 @@ export class CanvasView implements ScrollHost, InputHost {
 		}
 	}
 
-	private preventContextMenu = (e: Event) => { if (!this.blocks.contains(e.target)) e.preventDefault() }
+	private contextMenu: NativeContextMenu
+
+	/// Touch long presses select (no native menu: the app's comes from
+	/// `touchSelection.onMenu`). A mouse right press armed the
+	/// context menu's stand-in element (`contextmenu.ts`), which this
+	/// event hits; the keyboard's menu key targets the input element.
+	private onContextMenu = (e: MouseEvent) => {
+		if (this.blocks.contains(e.target)) return
+		let ours = this.contextMenu.owns(e)
+		if (ours || e.target == this.input.element) {
+			if (this.plugins.handle("contextmenu", e) || e.defaultPrevented) {
+				e.preventDefault()
+				this.contextMenu.close(true)
+				return
+			}
+		}
+		if (ours) this.contextMenu.show()
+		else e.preventDefault()
+	}
+
+	/// A mouse press that opens the context menu (Ctrl-click on macOS).
+	private menuPress(e: PointerEvent) {
+		if (this.config.nativeContextMenu === false) return false
+		if (!(e.button == 2 || mac && e.button == 0 && e.ctrlKey && !e.metaKey)) return false
+		return e.clientX - this.surfaceRect().left >= this.gutterWidth
+	}
 
 	/// Mouse over the gutter shows every fold marker in "fade" mode.
 	private onPointerHover = (e: PointerEvent) => {
@@ -1394,9 +1433,21 @@ export class CanvasView implements ScrollHost, InputHost {
 		c.x = e.clientX
 		c.y = e.clientY
 		this.mouseSelection?.destroy()
+		this.contextMenu.close(true)
 		let mustFocus = !this.hasFocus
 		this.focus()
 		if (this.plugins.handle("mousedown", e) || this.clickSpecial(e.clientX, e.clientY, e)) {
+			e.preventDefault()
+			return
+		}
+		if (this.menuPress(e)) {
+			// Like VS Code (and Chrome in editable DOM text), a right press
+			// outside the selection moves the cursor there, so Paste goes
+			// where the menu was opened.
+			let {pos, side} = this.posAndSideAtClient(e.clientX, e.clientY), sel = this.state.selection
+			if (!sel.ranges.some(r => !r.empty && pos >= r.from && pos <= r.to))
+				this.dispatch({selection: EditorSelection.cursor(pos, side), userEvent: "select.pointer"})
+			this.contextMenu.arm(e.clientX, e.clientY)
 			e.preventDefault()
 			return
 		}
@@ -1455,7 +1506,7 @@ export class CanvasView implements ScrollHost, InputHost {
 	reconfigure(options: Pick<CanvasViewConfig, "scrollSpeed" | "scrollPastEnd" | "horizontalScrollPastEnd" | "foldMarkers" |
 		"wrapIndent" | "lineWrapping" | "textDirection" | "indentGuides" | "lineNumbers" | "cursorBlinkRate" | "highlightActiveLine" | "cursorWidth" |
 		"placeholder" | "showWhitespace" | "onLineNumberClick" | "rainbowBrackets" | "gutterMarkers" | "readOnlyCursor" | "stickyScroll" |
-		"fontLigatures">) {
+		"fontLigatures" | "nativeContextMenu">) {
 		Object.assign(this.config, options)
 		if ("fontLigatures" in options) this.syncLigatures()
 		if ("readOnlyCursor" in options) this.syncWritable()
@@ -1528,7 +1579,7 @@ export class CanvasView implements ScrollHost, InputHost {
 
 	private contentAttrs: string[] = []
 
-	get hasFocus() { return this.input.hasFocus() }
+	get hasFocus() { return this.input.hasFocus() || this.contextMenu.focused }
 
 	/// The element receiving text input (CodeMirror's `contentDOM`).
 	get contentDOM() { return this.input.element }
@@ -3355,7 +3406,8 @@ export class CanvasView implements ScrollHost, InputHost {
 		this.scrollDOM.removeEventListener("pointerdown", this.onPointerDownFirst, true)
 		this.scrollDOM.removeEventListener("pointerdown", this.onMouseDown)
 		this.scrollDOM.removeEventListener("mousedown", this.preventFocusLoss)
-		this.scrollDOM.removeEventListener("contextmenu", this.preventContextMenu)
+		this.scrollDOM.removeEventListener("contextmenu", this.onContextMenu)
+		this.contextMenu.destroy()
 		this.scrollDOM.removeEventListener("pointermove", this.onPointerHover)
 		this.scrollDOM.removeEventListener("pointerleave", this.onPointerHover)
 		if (this.treeSyncTimer != null) clearTimeout(this.treeSyncTimer)

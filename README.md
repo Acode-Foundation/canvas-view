@@ -135,6 +135,7 @@ run against it unchanged.
 | `tabSize` | from the state | |
 | `input` | `"auto"` | `"editcontext"` or `"textarea"` |
 | `touchSelection` | | `{handleSize, cursorHandleTimeout, onMenu, onHaptic, wordRange}` |
+| `nativeContextMenu` | `true` | The browser's Cut/Copy/Paste/Select all menu on a mouse right-click; `EditorView.domEventHandlers({contextmenu})` can replace it |
 | `lowLatency` | `false` | Request a desynchronized canvas |
 | `dispatchTransactions` | | Like CodeMirror's |
 
@@ -193,6 +194,22 @@ new CanvasView({
 	}
 })
 ```
+
+### Context menu
+
+A mouse right-click in the text shows the browser's own editing menu
+(Cut, Copy, Paste, Select all), as in a DOM editor. A right-click
+outside the selection moves the cursor there first. To show your own
+menu, handle the event the CodeMirror way:
+
+```ts
+EditorView.domEventHandlers({
+	contextmenu: (e, view) => { myMenu.showAt(e.clientX, e.clientY); return true }
+})
+```
+
+Touch long presses select text instead; use `touchSelection.onMenu` for
+a touch menu.
 
 ### Word completion
 

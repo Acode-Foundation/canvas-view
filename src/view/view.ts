@@ -24,7 +24,7 @@ import type {RowMap} from "./rowmap"
 import {basicMouseSelection, type MouseHost, MouseSelection, type MouseSelectionStyle, TextDragDrop} from "./mouse"
 import {Scene, sameRuns, type TextStyle, type TokenDeco} from "./scene"
 import {ScrollController, type ScrollHost} from "./scroll"
-import {ScopeFinder, type StickyHeaders, type StickyRows} from "./sticky"
+import {indentWidth, ScopeFinder, type StickyHeaders, type StickyRows} from "./sticky"
 import {type LineRuns, SyntaxDriver} from "./syntax"
 import {CanvasTheme, type CanvasThemeSpec, darkTheme} from "./theme"
 import {ClassStyleReader, sameHighlighters, stateHighlighters} from "./highlight"
@@ -32,6 +32,7 @@ import type {Highlighter} from "@lezer/highlight"
 import {TouchSelection, type TouchSelectionConfig, mac} from "./touchselect"
 import {Magnifier} from "./magnifier"
 import {NativeContextMenu} from "./contextmenu"
+import {type BracketPair, bracketPairs} from "./pairguides"
 
 export interface CanvasViewConfig {
 	parent?: HTMLElement
@@ -102,6 +103,15 @@ export interface CanvasViewConfig {
 	/// Color brackets by nesting depth (from the syntax tree, skipping
 	/// strings and comments). Default false.
 	rainbowBrackets?: boolean | {colors?: readonly string[]}
+	/// Bracket pair guides, like VS Code's `editor.guides.bracketPairs`:
+	/// a line joining the brackets of each pair that spans lines, at the
+	/// smaller indentation of its two lines, in the pair's rainbow color
+	/// (whether or not `rainbowBrackets` colors the brackets). The pair
+	/// around the cursor is brighter and gets short horizontal lines to
+	/// its brackets. `true` draws every pair, "active" only the cursor's.
+	/// Brackets come from the syntax tree (not in strings or comments).
+	/// Default false.
+	bracketPairGuides?: boolean | "active"
 	/// Gutter markers from CodeMirror `gutter()` configs (lint,
 	/// breakpoints...): "shared" (default) puts them all in one narrow
 	/// column (the first gutter's marker wins on a line); "columns" gives
@@ -374,6 +384,8 @@ export class CanvasView implements ScrollHost, InputHost {
 	// coordinates; rebuilt when the selection or visible window changes.
 	// One buffer per layer, so every pass starts at instance 0.
 	private underRects = new InstanceBuffer(RECT_STRIDE, 64)
+	/// Bracket pair guides (under the text).
+	private pairRects = new InstanceBuffer(RECT_STRIDE, 64)
 	private overRects = new InstanceBuffer(RECT_STRIDE, 16)
 	private cursorRects = new InstanceBuffer(RECT_STRIDE, 4)
 	/// Characters under block cursors, in the background color.
@@ -1636,7 +1648,8 @@ export class CanvasView implements ScrollHost, InputHost {
 	reconfigure(options: Pick<CanvasViewConfig, "scrollSpeed" | "scrollPastEnd" | "horizontalScrollPastEnd" | "foldMarkers" |
 		"wrapIndent" | "lineWrapping" | "textDirection" | "indentGuides" | "lineNumbers" | "cursorBlinkRate" | "highlightActiveLine" | "cursorWidth" |
 		"placeholder" | "showWhitespace" | "onLineNumberClick" | "rainbowBrackets" | "gutterMarkers" | "readOnlyCursor" | "stickyScroll" |
-		"fontLigatures" | "nativeContextMenu" | "cursorStyle" | "cursorBlinking" | "cursorSmoothCaretAnimation" | "smoothScrolling">) {
+		"fontLigatures" | "nativeContextMenu" | "cursorStyle" | "cursorBlinking" | "cursorSmoothCaretAnimation" | "smoothScrolling" |
+		"bracketPairGuides">) {
 		Object.assign(this.config, options)
 		if ("fontLigatures" in options) this.syncLigatures()
 		if ("readOnlyCursor" in options) this.syncWritable()
@@ -2373,16 +2386,43 @@ export class CanvasView implements ScrollHost, InputHost {
 
 	private rainbow: {key: unknown[], value: RainbowBrackets | null} = {key: [], value: null}
 
+	/// The bracket scan, for rainbow brackets and bracket pair guides.
 	private get rainbowState() {
-		let c = this.config.rainbowBrackets ?? false, key = [c, this.theme]
+		let c = this.config.rainbowBrackets ?? false, guides = !!this.config.bracketPairGuides, key = [c, guides, this.theme]
 		if (!key.every((v, i) => v === this.rainbow.key[i])) {
-			let colors = c ? (c !== true && c.colors?.length ? c.colors : this.theme.dark ? darkRainbow : lightRainbow) : null
+			let colors = c || guides ? (c && c !== true && c.colors?.length ? c.colors : this.theme.dark ? darkRainbow : lightRainbow) : null
 			this.rainbow = {key, value: colors ? new RainbowBrackets(colors.map(x => parseColor(x))) : null}
 		}
 		return this.rainbow.value
 	}
 
-	get rainbowColors() { return this.rainbowState?.colors ?? null }
+	/// Bracket colors for the scene: only with `rainbowBrackets`.
+	get rainbowColors() { return this.config.rainbowBrackets ? this.rainbowState?.colors ?? null : null }
+
+	private pairCache: {key: unknown[], value: readonly BracketPair[], inner: Map<number, number>,
+		spans: Map<BracketPair, number[]>, indents: Map<number, number>} = {key: [], value: [], inner: new Map, spans: new Map, indents: new Map}
+
+	/// Bracket pairs crossing the selection layers' window (cached until
+	/// the document, tree or window changes).
+	private bracketPairs(): readonly BracketPair[] {
+		let r = this.rainbowState
+		if (!this.config.bracketPairGuides || !r) return []
+		let doc = this.state.doc, pub = this.syntax.canonicalTree(doc), w = this.selWindow, lines = this.lines
+		let first = lines.lineAtRow(Math.max(0, w.first)).line
+		let last = lines.lineAtRow(Math.max(0, Math.min(w.last, lines.totalRows - 1))).line
+		let c = this.pairCache, k = c.key
+		// Rows (wrapping, folds) move the guides' spans: they're kept with
+		// the pairs and keyed on the line model's version too.
+		if (k[0] !== doc || k[1] !== pub?.tree || k[2] !== pub?.len || k[3] !== first || k[4] !== last || k[5] !== r ||
+			k[6] !== this.tabSize || k[7] !== lines.version) {
+			let tree = pub?.tree ?? null, len = pub?.len ?? 0
+			let value = bracketPairs(doc, first, last, this.tabSize, n => r.lineBrackets(doc, tree, len, n), n => r.depthAt(doc, tree, len, n))
+			let inner = new Map<number, number>()
+			for (let p of value) inner.set(p.openLine * 1024 + p.col, Math.max(inner.get(p.openLine * 1024 + p.col) ?? -1, p.depth))
+			this.pairCache = {key: [doc, pub?.tree, pub?.len, first, last, r, this.tabSize, lines.version], value, inner, spans: new Map, indents: new Map}
+		}
+		return this.pairCache.value
+	}
 
 	lineBrackets(n: number) {
 		let r = this.rainbowState
@@ -2693,7 +2733,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		let key = [this.state.selection, this.state.doc, this.scene.origin, w.first, w.last, this.theme, this.metrics, this.width,
 			this.atlas.generation, this.composition, this.touchSelection.version, this.lines.version, foldedRanges(this.state), this.focused,
 			this.gutterHover, syntaxTree(this.state), this.config.placeholder, this.config.highlightActiveLine, this.config.cursorWidth,
-			this.config.cursorStyle, ...this.vimKey(),
+			this.config.cursorStyle, this.config.bracketPairGuides, this.bracketPairs(), ...this.vimKey(),
 			this.relativeNumbers, this.dropPos, ...this.markerKey()]
 		if (key.some((v, i) => v !== this.dynKey[i])) {
 			this.dynKey = key
@@ -2872,6 +2912,8 @@ export class CanvasView implements ScrollHost, InputHost {
 			flushSpan()
 		}
 
+		this.buildPairGuides(rowY)
+
 		if (gw) {
 			pushRect(gutter, 0, -FAR, gw, 2 * FAR, t.gutterBackground)
 			pushRect(gutter, gw - 1, -FAR, 1, 2 * FAR, t.gutterBorder)
@@ -2960,6 +3002,61 @@ export class CanvasView implements ScrollHost, InputHost {
 				}
 			}
 		}
+	}
+
+	/// Bracket pair guides (`bracketPairGuides`): for each pair spanning
+	/// lines, a 1px line from below the opening bracket's row to the
+	/// closing bracket's row, at the pair's column, skipping rows whose
+	/// text starts at or left of it (a guide never crosses text, like the
+	/// indent guides). The innermost pair around the main cursor is drawn
+	/// in full color, the others faded. Each pair's row spans are worked
+	/// out once (`pairSpans`), so a cursor move only pushes rects.
+	private buildPairGuides(rowY: (row: number) => number) {
+		let buf = this.pairRects
+		buf.reset()
+		let mode = this.config.bracketPairGuides, pairs = this.bracketPairs()
+		if (!mode || !pairs.length) return
+		let colors = this.rainbowState!.colors, cw = this.cellWidth, lh = this.lineHeight
+		let head = this.state.selection.main.head, active: BracketPair | null = null
+		for (let p of pairs)
+			if ((p.open < 0 || p.open < head) && (p.close < 0 || head <= p.close) && (!active || p.open > active.open)) active = p
+		let inner = this.pairCache.inner
+		for (let p of pairs) {
+			let isActive = p == active
+			if (mode == "active" && !isActive) continue
+			// Pairs opening on the same line at the same column (\`f(() => {\`
+			// ... \`})\`) would draw on top of each other: the innermost.
+			if (!isActive && inner.get(p.openLine * 1024 + p.col)! > p.depth) continue
+			let c = colors[p.depth % colors.length]
+			if (!isActive) c = (c & 0xffffff) | Math.round((c >>> 24) * 0.45) << 24
+			let spans = this.pairSpans(p), x = p.col * cw
+			for (let i = 0; i < spans.length; i += 2) pushRect(buf, x, rowY(spans[i]), 1, (spans[i + 1] - spans[i]) * lh, c)
+		}
+	}
+
+	/// The rows (flat [from, to) pairs) a pair's guide is drawn on, within
+	/// the window the pairs were found for.
+	private pairSpans(p: BracketPair): number[] {
+		let cached = this.pairCache.spans.get(p)
+		if (cached) return cached
+		let lines = this.lines, doc = this.state.doc, {first, last} = this.selWindow, spans: number[] = []
+		let r0 = Math.max(first, p.open >= 0 ? this.posCoords(p.open, 1).row + 1 : first)
+		let r1 = Math.min(last + 1, p.close >= 0 ? this.posCoords(p.close, 1).row : last + 1)
+		let indents = this.pairCache.indents
+		for (let r = r0; r < r1;) {
+			let {line, rowStart} = lines.lineAtRow(r), vl = lines.vline(line)
+			let next = Math.max(r + 1, rowStart + vl.rows + vl.blockRows)
+			let ind = indents.get(vl.first)
+			if (ind == null) indents.set(vl.first, ind = indentWidth(doc.line(vl.first).text, this.tabSize))
+			if (!vl.cover && (ind < 0 || ind > p.col)) {
+				let a = Math.max(r0, r), b = Math.min(r1, next)
+				if (spans.length && spans[spans.length - 1] == a) spans[spans.length - 1] = b
+				else if (b > a) spans.push(a, b)
+			}
+			r = next
+		}
+		this.pairCache.spans.set(p, spans)
+		return spans
 	}
 
 	/// Draw one cursor of `shape` at `head` (row `row`, column `x`,
@@ -3420,6 +3517,7 @@ export class CanvasView implements ScrollHost, InputHost {
 			i++
 		}
 		put("rect", this.underRects, textX, sceneY, content)
+		put("rect", this.pairRects, textX, sceneY, content)
 		put("rect", scene.rects, textX, sceneY, content)
 		put("glyph", scene.glyphs, textX, sceneY, content)
 		put("glyph", this.placeholderGlyphs, textX, sceneY, content)

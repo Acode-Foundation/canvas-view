@@ -115,6 +115,13 @@ export class RainbowBrackets {
 		return this.brackets.get(n) ?? null
 	}
 
+	/// Bracket depth at the start of line `n` (scanning like
+	/// `lineBrackets`), or null when the tree doesn't cover it yet.
+	depthAt(doc: Text, tree: Tree | null, treeLen: number, n: number): number | null {
+		if (!this.lineBrackets(doc, tree, treeLen, n)) return null
+		return this.depth.get(n) ?? null
+	}
+
 	private trim(n: number) {
 		for (let k of this.brackets.keys()) if (Math.abs(k - n) > 2000) this.brackets.delete(k)
 		for (let k of this.depth.keys()) if (Math.abs(k - n) > 2000 && k % 256) this.depth.delete(k)

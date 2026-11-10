@@ -72,6 +72,8 @@ export const sections: Section[] = [
 		{key: "guides", label: "Indent guides", def: "active", choices: [["active", "On + active block"], ["on", "On"], ["blank", "On, not on blank lines"], ["off", "Off"]],
 			live: (v, x) => v.reconfigure({indentGuides: guideOption(x)})},
 		{key: "rainbow", label: "Rainbow brackets", def: "1", choices: onOff, live: (v, x) => v.reconfigure({rainbowBrackets: x == "1"})},
+		{key: "pairGuides", label: "Bracket pair guides", def: "0", choices: [["0", "Off"], ["active", "Cursor's pair"], ["1", "All pairs"]],
+			live: (v, x) => v.reconfigure({bracketPairGuides: x == "1" ? true : x == "active" ? "active" : false})},
 		{key: "sticky", label: "Sticky scroll", def: "5", choices: [["0", "Off"], ["1", "1 line"], ["3", "Up to 3 lines"], ["5", "Up to 5 lines"]],
 			live: (v, x) => v.reconfigure({stickyScroll: stickyOption(x)})},
 		{key: "whitespace", label: "Show whitespace", def: "0",

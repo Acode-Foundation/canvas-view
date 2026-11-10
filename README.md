@@ -122,6 +122,7 @@ run against it unchanged.
 | `textDirection` | `"ltr"` | `"rtl"`, or `"auto"` (per line; default with `EditorView.perLineTextDirection`) |
 | `indentGuides` | `true` | `false`, or `{active, hideOnBlankLines}` |
 | `rainbowBrackets` | `false` | `true`, or `{colors}` |
+| `bracketPairGuides` | `false` | `true` (every pair spanning lines) or `"active"` (the cursor's): lines joining matching brackets, in their rainbow colors |
 | `showWhitespace` | auto | `true`, `false`, or `{spaces, trailing, lineBreaks}`; on with `highlightWhitespace()` |
 | `gutterMarkers` | `"shared"` | `"columns"` (one per `gutter()`) or `"overlay"` (over the line numbers) |
 | `highlightActiveLine` | `true` | |

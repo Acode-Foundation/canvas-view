@@ -2,7 +2,7 @@ import {autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, cu
 import {defaultKeymap, history, historyKeymap, indentWithTab} from "@codemirror/commands"
 import {html} from "@codemirror/lang-html"
 import {javascript} from "@codemirror/lang-javascript"
-import {bracketMatching, codeFolding, foldable, foldKeymap, highlightingFor, HighlightStyle, indentOnInput, syntaxHighlighting, syntaxTree} from "@codemirror/language"
+import {bracketMatching, codeFolding, foldable, foldEffect, foldKeymap, highlightingFor, HighlightStyle, indentOnInput, syntaxHighlighting, syntaxTree} from "@codemirror/language"
 import {classHighlighter, tags} from "@lezer/highlight"
 import {type Diagnostic, linter, lintGutter, lintKeymap, setDiagnostics} from "@codemirror/lint"
 import {closeSearchPanel, highlightSelectionMatches, openSearchPanel, search, searchKeymap} from "@codemirror/search"
@@ -339,6 +339,7 @@ let view = new CanvasView({
 	highlightActiveLine: get("activeLine") == "1",
 	gutterMarkers: get("markers") as any,
 	rainbowBrackets: get("rainbow") == "1",
+	bracketPairGuides: get("pairGuides") == "1" ? true : get("pairGuides") == "active" ? "active" : false,
 	showWhitespace: whitespaceOption(get("whitespace")),
 	cursorWidth: +get("cursorWidth"),
 	cursorStyle: get("cursorStyle") as any,
@@ -398,7 +399,7 @@ window.view = view
 window.cmApi = {openSearchPanel, closeSearchPanel, currentCompletions, syntaxTree, foldable, EditorView, ViewPlugin, StateEffect, StateField, Decoration, WidgetType,
 	gutter, GutterMarker, gutterLineClass, lineNumberMarkers, RangeSet,
 	highlightWhitespace, breakpointState, HighlightStyle, syntaxHighlighting, highlightingFor, classHighlighter, tags, EditorState, javascript,
-	readOnlyCompartment, setDiagnostics, getCM, Vim}
+	readOnlyCompartment, setDiagnostics, getCM, Vim, foldEffect, codeFolding}
 window.createMs = created
 window.viewStart = viewStart
 let waitBackend = () => view.backend ? (window.ready = true) : requestAnimationFrame(waitBackend)

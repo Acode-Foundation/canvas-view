@@ -72,7 +72,7 @@ function syntaxFolds(lang: Language | null) {
 }
 
 /// Columns of a line's indentation, or -1 for a blank line.
-function indentWidth(text: string, tabSize: number) {
+export function indentWidth(text: string, tabSize: number) {
 	let cols = 0
 	for (let i = 0; i < text.length; i++) {
 		let c = text.charCodeAt(i)

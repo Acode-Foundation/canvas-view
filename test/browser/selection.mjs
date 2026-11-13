@@ -293,6 +293,20 @@ s = await sel()
 check("long press selects the word", s.text == "console", JSON.stringify(s.text))
 m = await menu()
 check("menu shows after a long press", m.shown)
+// Chrome's own long-press gesture (raw touch events don't make one)
+// runs mouse-press focus handling before `contextmenu`: unless the
+// touch's pointerdown is cancelled, focus goes to body and an Android
+// keyboard closes (Acode issue #3056).
+await page.evaluate(p => { view.dispatch({selection: {anchor: p}}); view.focus() }, p)
+await page.evaluate(() => {
+	window.lostFocus = false
+	view.input.element.addEventListener("focusout", () => window.lostFocus = true, {once: true})
+})
+await cdp.send("Input.synthesizeTapGesture", {x: pt.x, y: pt.y, duration: 800, gestureSourceType: "touch"})
+await frames()
+s = await sel()
+let focus = await page.evaluate(() => ({lost: window.lostFocus, focused: view.hasFocus}))
+check("a long-press gesture keeps the input focused", !focus.lost && focus.focused && s.text == "console", JSON.stringify({...focus, text: s.text}))
 
 // Scrolling hides the menu and it comes back when settled.
 await drag([{x: 200, y: 600}, {x: 200, y: 560}, {x: 200, y: 520}, {x: 200, y: 500}])

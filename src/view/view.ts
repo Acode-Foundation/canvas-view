@@ -554,8 +554,9 @@ export class CanvasView implements ScrollHost, InputHost {
 		// Taps, clicks and gutter presses act on the full syntax tree.
 		this.scrollDOM.addEventListener("pointerdown", this.onPointerDownFirst, true)
 		this.scrollDOM.addEventListener("pointerdown", this.onMouseDown)
-		// Taps generate compatibility mouse events afterwards; their
-		// default action would move focus off the input element.
+		// A mouse press's default action would move focus off the input
+		// element (touches have no mouse events: their pointerdown is
+		// cancelled).
 		this.scrollDOM.addEventListener("mousedown", this.preventFocusLoss)
 		this.scrollDOM.addEventListener("contextmenu", this.onContextMenu)
 		this.scrollDOM.addEventListener("pointermove", this.onPointerHover)
@@ -1583,7 +1584,17 @@ export class CanvasView implements ScrollHost, InputHost {
 	/// `clickAddsSelectionRange` adds a cursor). A press inside the
 	/// selection may start a native text drag instead.
 	private onMouseDown = (e: PointerEvent) => {
-		if (e.pointerType != "mouse" || this.blocks.contains(e.target)) return
+		if (this.blocks.contains(e.target)) return
+		if (e.pointerType != "mouse") {
+			// A touch long press makes Chrome run mouse-press focus handling
+			// before its `contextmenu` (Blink's GestureManager), which moves
+			// focus off the input to `body` and closes the on-screen
+			// keyboard (Acode issue #3056). Cancelling the touch's
+			// `pointerdown` suppresses the mouse events of its gestures,
+			// and with them that focus change. Taps still get their click.
+			if (e.target != this.input.element) e.preventDefault()
+			return
+		}
 		if (e.button == 0 && this.stickyClick(e.clientX, e.clientY, e)) return
 		let c = this.lastClick
 		c.count = e.timeStamp - c.time < 400 && Math.abs(e.clientX - c.x) < 4 && Math.abs(e.clientY - c.y) < 4 ? c.count % 3 + 1 : 1

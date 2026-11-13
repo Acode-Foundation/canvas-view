@@ -489,7 +489,7 @@ export class CanvasView implements ScrollHost, InputHost {
 
 		this.dom = document.createElement("div")
 		this.dom.className = "cm-editor cv-editor"
-		this.dom.style.background = cssColor(this.theme.background)
+		this.syncBackground()
 		this.scrollDOM = document.createElement("div")
 		this.scrollDOM.className = "cm-scroller"
 		Object.assign(this.scrollDOM.style, {
@@ -587,7 +587,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		// A device that keeps getting lost is worse than WebGL2.
 		if (kind == "webgpu" && this.webgpuLosses < MAX_WEBGPU_LOSSES) {
 			size()
-			try { backend = await WebGPUBackend.create(this.canvas, device) }
+			try { backend = await WebGPUBackend.create(this.canvas, device, !this.theme.opaque) }
 			catch (e) {
 				console.warn("canvas-view: WebGPU init failed, using WebGL2", e)
 				// The canvas may hold a WebGPU context now, and then can't
@@ -599,7 +599,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		if (!backend) {
 			// After a failed WebGPU start this is a new canvas.
 			size()
-			backend = new WebGL2Backend(this.canvas, {lowLatency: this.config.lowLatency})
+			backend = new WebGL2Backend(this.canvas, {lowLatency: this.config.lowLatency, transparent: !this.theme.opaque})
 		}
 		let current = backend
 		backend.onLost = permanent => this.onContextLost(current, permanent)
@@ -662,6 +662,22 @@ export class CanvasView implements ScrollHost, InputHost {
 		this.replaceCanvas()
 		// The new backend has no GPU objects: its first frame uploads the
 		// whole atlas and every instance buffer.
+		this.initBackend(old.kind)
+	}
+
+	/// A theme switching between an opaque and a see-through background
+	/// on a backend that can't change it in place (WebGL2): a new canvas
+	/// and context. The scene is CPU-side, so only uploads are repeated;
+	/// WebGL2 starts synchronously, so no frame is missed.
+	private syncTransparency() {
+		let old = this.backend, want = !this.theme.opaque
+		if (!old || old.transparent == want || old.setTransparent(want)) return
+		old.onLost = old.onRestored = null
+		old.destroy()
+		this.backend = null
+		if (this.recoveryTimer != null) clearTimeout(this.recoveryTimer)
+		this.recoveryTimer = null
+		this.replaceCanvas()
 		this.initBackend(old.kind)
 	}
 
@@ -3086,7 +3102,7 @@ export class CanvasView implements ScrollHost, InputHost {
 			// VS Code's and Vim's block cursors.
 			if (ch && ch.trim() && ch.charCodeAt(0) >= 32 && !rtlChars.test(ch)) {
 				let g = this.atlas.glyph(0, ch)
-				if (g.w) pushGlyph(this.cursorGlyphs, left + g.ox, y + g.oy, g, t.background)
+				if (g.w) pushGlyph(this.cursorGlyphs, left + g.ox, y + g.oy, g, this.solidBackground)
 			}
 		} else if (shape == "block-outline") {
 			pushRect(this.cursorRects, left, y, w, 1, t.cursor)
@@ -3424,7 +3440,9 @@ export class CanvasView implements ScrollHost, InputHost {
 		for (let i = 0; i < lines.length; i++) {
 			let part = this.stickyParts[i == lines.length - 1 ? 0 : 1], y = i * lh
 			let vl = this.lines.vline(lines[i])
-			pushRect(part.bg, 0, y, FAR, lh, t.stickyBackground)
+			// Nothing is drawn under them: on a see-through background they
+			// are see-through too, unless the theme gives them a color.
+			if (t.stickyBackground != null) pushRect(part.bg, 0, y, FAR, lh, t.stickyBackground)
 			if (gw) {
 				pushRect(part.bg, 0, y, gw, lh, t.gutterBackground)
 				pushRect(part.bg, gw - 1, y, 1, lh, t.gutterBorder)
@@ -3496,14 +3514,33 @@ export class CanvasView implements ScrollHost, InputHost {
 	}
 
 	private passList: DrawPass[] = []
-	private clips = {content: {x: 0, y: 0, w: 0, h: 0}, gutter: {x: 0, y: 0, w: 0, h: 0}}
+	private clips = {
+		content: {x: 0, y: 0, w: 0, h: 0}, gutter: {x: 0, y: 0, w: 0, h: 0},
+		// The text and gutter below the sticky lines, and the last sticky
+		// line's slot and below (its shadow).
+		text: {x: 0, y: 0, w: 0, h: 0}, gutterText: {x: 0, y: 0, w: 0, h: 0},
+		lastSticky: {x: 0, y: 0, w: 0, h: 0}, lastStickyText: {x: 0, y: 0, w: 0, h: 0}, lastStickyGutter: {x: 0, y: 0, w: 0, h: 0}
+	}
 
 	private passes(): DrawPass[] {
 		let scene = this.scene, p = this.passList
 		let cl = this.contentLeft, gw = this.gutterWidth
-		let content = this.clips.content, gutter = this.clips.gutter
+		let clips = this.clips, content = clips.content, gutter = clips.gutter
 		content.x = gw; content.w = this.width - gw; content.h = this.height
 		gutter.w = gw; gutter.h = this.height
+		// Nothing is drawn under the sticky lines, so they needn't be
+		// opaque to hide it (a see-through background shows a picture
+		// behind them too). The last line, pushed up, slides under the
+		// ones above: it's clipped to its slot.
+		let stickyH = this.stickyMax ? Math.max(0, this.sticky.height) : 0
+		let lastTop = this.stickyMax ? Math.max(0, this.sticky.lines.length - 1) * this.lineHeight : 0
+		let text = clips.text, gutterText = clips.gutterText
+		text.x = gw; text.y = stickyH; text.w = this.width - gw; text.h = Math.max(0, this.height - stickyH)
+		gutterText.y = stickyH; gutterText.w = gw; gutterText.h = text.h
+		let last = clips.lastSticky, lastText = clips.lastStickyText, lastGutter = clips.lastStickyGutter
+		last.y = lastText.y = lastGutter.y = lastTop
+		last.w = this.width; last.h = lastText.h = lastGutter.h = Math.max(0, this.height - lastTop)
+		lastText.x = gw; lastText.w = this.width - gw; lastGutter.w = gw
 		let sceneY = this.rowTop(scene.origin) - this.top, textX = cl - this.left
 		let i = 0
 		let put = (kind: "rect" | "glyph", buffer: InstanceBuffer, offsetX: number, offsetY: number, clip: DrawPass["clip"]) => {
@@ -3516,31 +3553,31 @@ export class CanvasView implements ScrollHost, InputHost {
 			pass.clip = clip
 			i++
 		}
-		put("rect", this.underRects, textX, sceneY, content)
-		put("rect", this.pairRects, textX, sceneY, content)
-		put("rect", scene.rects, textX, sceneY, content)
-		put("glyph", scene.glyphs, textX, sceneY, content)
-		put("glyph", this.placeholderGlyphs, textX, sceneY, content)
-		put("rect", this.overRects, textX, sceneY, content)
+		put("rect", this.underRects, textX, sceneY, text)
+		put("rect", this.pairRects, textX, sceneY, text)
+		put("rect", scene.rects, textX, sceneY, text)
+		put("glyph", scene.glyphs, textX, sceneY, text)
+		put("glyph", this.placeholderGlyphs, textX, sceneY, text)
+		put("rect", this.overRects, textX, sceneY, text)
 		let caret = this.caretOffset, hidden = this.focused ? !this.cursorOn : !this.steadyCursor
-		put("rect", this.cursorRects, textX + caret.x, sceneY + caret.y, content)
+		put("rect", this.cursorRects, textX + caret.x, sceneY + caret.y, text)
 		// Blink and blur hide the cursor without rebuilding anything.
 		if (hidden) p[i - 1].count = 0
-		put("glyph", this.cursorGlyphs, textX + caret.x, sceneY + caret.y, content)
+		put("glyph", this.cursorGlyphs, textX + caret.x, sceneY + caret.y, text)
 		if (hidden) p[i - 1].count = 0
 		if (gw) {
-			put("rect", this.gutterRects, 0, sceneY, gutter)
-			put("glyph", scene.gutter, 0, sceneY, gutter)
-			put("glyph", this.dynGlyphs, 0, sceneY, gutter)
+			put("rect", this.gutterRects, 0, sceneY, gutterText)
+			put("glyph", scene.gutter, 0, sceneY, gutterText)
+			put("glyph", this.dynGlyphs, 0, sceneY, gutterText)
 		}
 		// Sticky lines over everything but handles and scrollbars: the
 		// last one first, so it slides under the others when pushed up.
 		if (this.stickyMax) for (let j = 0; j < 2; j++) {
 			let part = this.stickyParts[j], y = j == 0 ? this.sticky.push : 0
-			put("rect", part.bg, 0, y, null)
-			put("rect", part.rects, textX, y, content)
-			put("glyph", part.glyphs, textX, y, content)
-			put("glyph", part.nums, 0, y, gutter)
+			put("rect", part.bg, 0, y, j == 0 ? last : null)
+			put("rect", part.rects, textX, y, j == 0 ? lastText : content)
+			put("glyph", part.glyphs, textX, y, j == 0 ? lastText : content)
+			put("glyph", part.nums, 0, y, j == 0 ? lastGutter : gutter)
 		}
 		put("glyph", this.handleGlyphs, textX, sceneY, null)
 		put("rect", this.vThumb, 0, this.thumbs.vY, null)
@@ -3601,7 +3638,8 @@ export class CanvasView implements ScrollHost, InputHost {
 
 	setTheme(spec: CanvasThemeSpec) {
 		this.theme = new CanvasTheme(spec)
-		this.dom.style.background = cssColor(this.theme.background)
+		this.syncBackground()
+		this.syncTransparency()
 		if (!this.highlighters) this.syntax.setHighlighter(this.syntaxHighlighter)
 		// Masks are tinted in the shader; only a dark/light switch
 		// (mask color) needs a new atlas.
@@ -3629,10 +3667,35 @@ export class CanvasView implements ScrollHost, InputHost {
 	}
 
 	/// Follow a line height change (a theme, the editor connected).
+	/// An opaque color for the character drawn in a block cursor (in the
+	/// background's color, which may be see-through): the background
+	/// itself when it's opaque.
+	private solidBackground: PackedColor = 0
+
+	/// The editor element's background follows the theme's, except a
+	/// fully transparent one, which leaves it to the CSS. Read outside
+	/// frames only: at theme changes and when style modules change.
+	private syncBackground() {
+		let t = this.theme, a = t.background >>> 24
+		this.dom.style.background = a ? cssColor(t.background) : ""
+		let solid = t.background
+		if (!t.opaque) {
+			let css = this.dom.isConnected ? parseColor(getComputedStyle(this.dom).backgroundColor) : 0
+			solid = (css >>> 24 ? css : a ? t.background : parseColor(t.dark ? "#1e1e1e" : "#fff")) | 0xff000000
+			solid >>>= 0
+		}
+		if (solid == this.solidBackground) return
+		this.solidBackground = solid
+		this.sticky.key = []
+		this.dynKey = []
+		this.requestFrame()
+	}
+
 	private syncLineHeight() {
 		let key = [this.state.facet(EditorView.styleModule), this.plugins.themeClasses]
 		if (!this.lineHeightUnread && sameKey(key, this.lineHeightKey)) return
 		this.lineHeightKey = key
+		if (!this.theme.opaque) this.syncBackground()
 		this.syncLigatures()
 		let px = this.measureLineHeight()
 		if (px == null || px == this.metrics.lineHeight) return

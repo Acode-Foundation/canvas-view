@@ -18,6 +18,13 @@ export interface TokenStyleSpec {
 
 export interface CanvasThemeSpec {
 	dark?: boolean
+	/// The text area's background. A color with alpha below 1, or
+	/// `"transparent"`, makes the canvas see-through, so whatever is
+	/// behind it shows (e.g. a picture on `.cm-editor::before`, as
+	/// Acode's Backdrop plugin draws one). With a fully transparent one
+	/// the editor element's own background is left to the CSS (an
+	/// `EditorView.theme` rule on `"&"`), as in CodeMirror. The gutter
+	/// defaults to it too.
 	background: string
 	foreground: string
 	gutterBackground?: string
@@ -37,8 +44,9 @@ export interface CanvasThemeSpec {
 	/// Whitespace markers and the trailing-space highlight.
 	whitespace?: string
 	trailingSpace?: string
-	/// Sticky scroll lines' background (defaults to the background) and
-	/// the shadow under them.
+	/// Sticky scroll lines' background and the shadow under them. It
+	/// defaults to the background (no text is drawn under them, so a
+	/// see-through background shows through them too).
 	stickyBackground?: string
 	stickyShadow?: string
 	/// Syntax colors: a CodeMirror HighlightStyle (its specs are read
@@ -64,6 +72,8 @@ export interface TokenStyle {
 export class CanvasTheme {
 	readonly dark: boolean
 	readonly background: PackedColor
+	/// The background is opaque (the canvas needs no alpha).
+	readonly opaque: boolean
 	readonly foreground: PackedColor
 	readonly gutterBackground: PackedColor
 	readonly gutterForeground: PackedColor
@@ -79,7 +89,9 @@ export class CanvasTheme {
 	readonly whitespace: PackedColor
 	readonly trailingSpace: PackedColor
 	readonly activeIndentGuide: PackedColor
-	readonly stickyBackground: PackedColor
+	/// Null when the background isn't opaque and no sticky background
+	/// was given: nothing is drawn behind them.
+	readonly stickyBackground: PackedColor | null
 	readonly stickyShadow: PackedColor
 	readonly highlighter: Highlighter
 	private specs: readonly TokenStyleSpec[]
@@ -89,6 +101,7 @@ export class CanvasTheme {
 		let c = (v: string | undefined, fallback: string) => parseColor(v ?? fallback)
 		this.dark = spec.dark ?? true
 		this.background = c(spec.background, "#000")
+		this.opaque = this.background >>> 24 == 255
 		this.foreground = c(spec.foreground, "#fff")
 		this.gutterBackground = c(spec.gutterBackground, spec.background)
 		this.gutterForeground = c(spec.gutterForeground, this.dark ? "#6b717d" : "#999")
@@ -104,7 +117,8 @@ export class CanvasTheme {
 		this.trailingSpace = c(spec.trailingSpace, "rgba(255,77,77,0.22)")
 		this.indentGuide = c(spec.indentGuide, this.dark ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.1)")
 		this.activeIndentGuide = c(spec.activeIndentGuide, this.dark ? "rgba(255,255,255,0.28)" : "rgba(0,0,0,0.3)")
-		this.stickyBackground = c(spec.stickyBackground, spec.background)
+		this.stickyBackground = spec.stickyBackground ? c(spec.stickyBackground, "#000")
+			: this.opaque ? this.background : null
 		this.stickyShadow = c(spec.stickyShadow, this.dark ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.18)")
 		let h = spec.highlight
 		this.specs = !h ? [] : "specs" in h ? h.specs as readonly TokenStyleSpec[] : h

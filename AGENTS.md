@@ -161,6 +161,12 @@ nothing, emits nothing and runs no layout.
   shader, so syntax colors don't multiply entries. Slots fit each glyph's
   ink bounds. ASCII has an array fast path. Only dirty rectangles are
   uploaded, straight from the canvas (no JS readback).
+- A theme `background` with alpha below 1 makes the canvas
+  see-through, so a picture behind `.cm-editor` shows (Acode's Backdrop
+  plugin). Opaque themes keep an opaque canvas. WebGL2 needs a new
+  context to switch; WebGPU reconfigures in place. Text and gutter
+  passes are clipped below the sticky lines, so those can be
+  see-through too.
 - **GPU context loss** is recovered automatically: a restored WebGL2
   context re-uploads everything; an unrestored one (after 2s) or a lost
   WebGPU device gets a fresh canvas and backend. The scene is CPU-side and

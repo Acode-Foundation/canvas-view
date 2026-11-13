@@ -34,6 +34,15 @@ export interface RenderBackend {
 	readonly maxTextureSize: number
 	/// True when the GPU context was lost and the backend can't draw.
 	readonly lost: boolean
+	/// Whether the canvas is see-through where nothing opaque is drawn
+	/// (a background with alpha below 1), so the page behind it shows.
+	/// Opaque canvases are cheaper to composite, so it's only on when
+	/// the theme asks for it.
+	readonly transparent: boolean
+	/// Switch transparency without a new context. Returns false when the
+	/// backend can't (a WebGL2 context's `alpha` is fixed at creation):
+	/// the caller then creates a new backend on a new canvas.
+	setTransparent(on: boolean): boolean
 	/// Called when the GPU context is lost. `permanent` means it can't
 	/// come back by itself (a WebGPU device loss): the backend must be
 	/// replaced. Otherwise (WebGL2) a restore may follow.
@@ -48,6 +57,8 @@ export interface RenderBackend {
 	resize(width: number, height: number, dpr: number): boolean
 	/// Upload pending atlas changes (and reallocate on size changes).
 	syncAtlas(atlas: GlyphAtlas): void
+	/// Clear to `background` (not premultiplied; its alpha is used only
+	/// on a transparent canvas) and draw the passes.
 	render(background: PackedColor, passes: readonly DrawPass[]): void
 	destroy(): void
 }

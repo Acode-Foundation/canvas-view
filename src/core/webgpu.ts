@@ -129,18 +129,21 @@ export class WebGPUBackend implements RenderBackend {
 	}
 
 	/// Create a WebGPU backend, or return null when no adapter exists.
-	static async create(canvas: Canvas, device = WebGPUBackend.requestDevice()): Promise<WebGPUBackend | null> {
+	static async create(canvas: Canvas, device = WebGPUBackend.requestDevice(), transparent = false): Promise<WebGPUBackend | null> {
 		let dev = await device
-		return dev && new WebGPUBackend(canvas, dev, navigator.gpu.getPreferredCanvasFormat())
+		return dev && new WebGPUBackend(canvas, dev, navigator.gpu.getPreferredCanvasFormat(), transparent)
 	}
 
-	private constructor(readonly canvas: Canvas, readonly device: GPUDevice, format: GPUTextureFormat) {
+	transparent: boolean
+
+	private constructor(readonly canvas: Canvas, readonly device: GPUDevice, format: GPUTextureFormat, transparent: boolean) {
+		this.transparent = transparent
 		this.format = format
 		this.maxTextureSize = device.limits.maxTextureDimension2D
 		let context = canvas.getContext("webgpu") as GPUCanvasContext | null
 		if (!context) throw new Error("canvas-view: WebGPU canvas context unavailable")
 		this.context = context
-		context.configure({device, format, alphaMode: "opaque"})
+		context.configure({device, format, alphaMode: transparent ? "premultiplied" : "opaque"})
 		// A lost device never comes back (whatever the reason, including
 		// a device.destroy() elsewhere): the view creates a new backend.
 		device.lost.then(() => {
@@ -330,9 +333,11 @@ export class WebGPUBackend implements RenderBackend {
 		if (countsChanged) queue.writeBuffer(this.indirect, 0, ind.buffer, 0, passes.length * 16)
 		if (keyChanged || !this.bundle) this.bundle = this.record(passes)
 
-		let [r, g, b] = unpackRGBA(background)
+		let [r, g, b, a] = unpackRGBA(background)
 		let clear = this.colorAttachment.clearValue as GPUColorDict
-		clear.r = r / 255; clear.g = g / 255; clear.b = b / 255
+		// Premultiplied, like everything the blend writes.
+		let alpha = this.transparent ? a / 255 : 1
+		clear.r = r / 255 * alpha; clear.g = g / 255 * alpha; clear.b = b / 255 * alpha; clear.a = alpha
 		this.colorAttachment.view = this.context.getCurrentTexture().createView()
 		let encoder = this.device.createCommandEncoder()
 		let pass = encoder.beginRenderPass(this.passDescriptor)
@@ -355,6 +360,16 @@ export class WebGPUBackend implements RenderBackend {
 			enc.drawIndirect(this.indirect, i * 16)
 		}
 		return enc.finish()
+	}
+
+	/// The alpha mode can change on a configured context (the textures
+	/// it hands out from then on use it); pipelines and the bundle stay.
+	setTransparent(on: boolean) {
+		if (on != this.transparent) {
+			this.transparent = on
+			this.context.configure({device: this.device, format: this.format, alphaMode: on ? "premultiplied" : "opaque"})
+		}
+		return true
 	}
 
 	destroy() {

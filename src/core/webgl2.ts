@@ -101,9 +101,12 @@ export class WebGL2Backend implements RenderBackend {
 	private dpr = 1
 	private atlasSize = 1
 
-	constructor(readonly canvas: Canvas, options: {lowLatency?: boolean} = {}) {
+	readonly transparent: boolean
+
+	constructor(readonly canvas: Canvas, options: {lowLatency?: boolean, transparent?: boolean} = {}) {
+		this.transparent = !!options.transparent
 		let gl = canvas.getContext("webgl2", {
-			alpha: false, antialias: false, depth: false, stencil: false,
+			alpha: this.transparent, antialias: false, depth: false, stencil: false,
 			premultipliedAlpha: true, preserveDrawingBuffer: false,
 			desynchronized: !!options.lowLatency, powerPreference: "default"
 		}) as WebGL2RenderingContext | null
@@ -257,8 +260,10 @@ export class WebGL2Backend implements RenderBackend {
 		let gl = this.gl
 		gl.viewport(0, 0, this.width, this.height)
 		gl.disable(gl.SCISSOR_TEST)
-		let [r, g, b] = unpackRGBA(background)
-		gl.clearColor(r / 255, g / 255, b / 255, 1)
+		let [r, g, b, a] = unpackRGBA(background)
+		// The drawing buffer holds premultiplied colors.
+		let alpha = this.transparent ? a / 255 : 1
+		gl.clearColor(r / 255 * alpha, g / 255 * alpha, b / 255 * alpha, alpha)
 		gl.clear(gl.COLOR_BUFFER_BIT)
 		let p = this.program, rect: boolean | null = null
 		gl.useProgram(p.program)
@@ -302,6 +307,8 @@ export class WebGL2Backend implements RenderBackend {
 			gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, pass.count)
 		}
 	}
+
+	setTransparent(on: boolean) { return on == this.transparent }
 
 	destroy() {
 		this.onLost = this.onRestored = null

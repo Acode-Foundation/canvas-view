@@ -293,6 +293,8 @@ const defaultFont: FontSpec = {
 	lineHeight: 1.4
 }
 
+const NO_PAIRS: readonly BracketPair[] = []
+
 /// A code editor view that draws with the GPU. It keeps CodeMirror's
 /// `EditorState` as its model, so state-level extensions (history,
 /// commands, language, autocomplete state, LSP client logic) work
@@ -2454,7 +2456,9 @@ export class CanvasView implements ScrollHost, InputHost {
 	/// the document, tree or window changes).
 	private bracketPairs(): readonly BracketPair[] {
 		let r = this.rainbowState
-		if (!this.config.bracketPairGuides || !r) return []
+		// The same array every time: this value is in the selection
+		// layers' key, and a new one rebuilt them on every frame.
+		if (!this.config.bracketPairGuides || !r) return NO_PAIRS
 		let doc = this.state.doc, pub = this.syntax.canonicalTree(doc), w = this.selWindow, lines = this.lines
 		let first = lines.lineAtRow(Math.max(0, w.first)).line
 		let last = lines.lineAtRow(Math.max(0, Math.min(w.last, lines.totalRows - 1))).line

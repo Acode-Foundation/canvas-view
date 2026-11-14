@@ -275,6 +275,9 @@ const FAR = 1e6
 /// resize lagging the viewport under `adjustResize`, well within the
 /// keyboard's own animation.
 const KEYBOARD_SETTLE = 150
+/// The scroller's own scroll position (its properties are routed to the view).
+const nativeScrollTop = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!
+const nativeScrollLeft = Object.getOwnPropertyDescriptor(Element.prototype, "scrollLeft")!
 
 // GPU context loss: how long to wait for a WebGL2 restore before
 // replacing the canvas, the window for backing off repeated losses,
@@ -503,6 +506,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		} satisfies Partial<CSSStyleDeclaration>)
 		this.dom.appendChild(this.scrollDOM)
 		this.defineScrollProps()
+		this.scrollDOM.addEventListener("scroll", this.undoNativeScroll)
 		this.canvas = createCanvas()
 		this.scrollDOM.appendChild(this.canvas)
 		this.blocks = new BlockLayer({
@@ -717,6 +721,18 @@ export class CanvasView implements ScrollHost, InputHost {
 				else { view.scrollTop += a.top ?? 0; view.scrollLeft += a.left ?? 0 }
 			}, configurable: true}
 		})
+	}
+
+	/// The scroller never scrolls natively (the view scrolls itself), but
+	/// `overflow: hidden` still lets the browser scroll it to show a
+	/// child past its edges: the focused input element (Android does on
+	/// keyboard open), a block widget, `scrollIntoView` from a plugin.
+	/// That moved the canvas and left a blank band at the bottom
+	/// (canvas-view#5); put it back.
+	private undoNativeScroll = () => {
+		let el = this.scrollDOM
+		if (nativeScrollTop.get!.call(el)) nativeScrollTop.set!.call(el, 0)
+		if (nativeScrollLeft.get!.call(el)) nativeScrollLeft.set!.call(el, 0)
 	}
 
 	/// The element events and coordinates are relative to.
@@ -3904,6 +3920,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		window.visualViewport?.removeEventListener("scroll", this.onViewportChange)
 		this.dprQuery?.removeEventListener("change", this.onDPR)
 		document.fonts?.removeEventListener?.("loadingdone", this.onFontsLoaded)
+		this.scrollDOM.removeEventListener("scroll", this.undoNativeScroll)
 		this.scrollDOM.removeEventListener("pointerdown", this.onPointerDownFirst, true)
 		this.scrollDOM.removeEventListener("pointerdown", this.onMouseDown)
 		this.scrollDOM.removeEventListener("mousedown", this.preventFocusLoss)

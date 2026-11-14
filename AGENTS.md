@@ -245,6 +245,11 @@ installed.
 - **EditContext** where available, mirroring a ±10k-char window around
   the selection; a hidden **textarea** otherwise. Typed text goes through
   `EditorView.inputHandler`, keys through CodeMirror's keymap facet.
+  The input element follows the cursor but is clamped inside
+  `.cm-scroller`, and any native scroll of the scroller is undone: the
+  browser scrolls it (despite `overflow: hidden`) to show a focused
+  element past its edges, which moved the canvas and left a blank band
+  (canvas-view#5).
 - `touch-action: none`: the view handles every pointer event and never
   uses native overflow scrolling, so **blank frames are impossible by
   construction**. Drags follow the finger 1:1; flings use Android's

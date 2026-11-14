@@ -219,6 +219,18 @@ export function inputHandlers(host: InputHost, view: unknown, isComposing: () =>
 	return {onKeyDown, onCopy, onPaste}
 }
 
+/// Put the input element at the cursor, kept inside the surface: past
+/// its edges (a caret scrolled away, or below an editor the keyboard
+/// just shrank) it gives the scroller overflow, and the browser then
+/// scrolls the scroller itself to show the focused element (Android
+/// does on keyboard open), moving the canvas (canvas-view#5). The IME
+/// gets the real cursor rect separately.
+function placeInputElement(el: HTMLElement, surface: DOMRect, cursor: DOMRect) {
+	let x = Math.max(0, Math.min(surface.width - 1, cursor.left - surface.left))
+	let y = Math.max(0, Math.min(surface.height - cursor.height, cursor.top - surface.top))
+	el.style.transform = `translate(${x}px, ${y}px)`
+}
+
 function styleInputElement(el: HTMLElement) {
 	Object.assign(el.style, {
 		position: "absolute", left: "0", top: "0", width: "1px", height: "1em",
@@ -456,7 +468,7 @@ class EditContextInput implements TextInput {
 		let cursor = this.host.cursorRect()
 		if (cursor) {
 			this.context.updateSelectionBounds(cursor)
-			this.element.style.transform = `translate(${cursor.left - rect.left}px, ${cursor.top - rect.top}px)`
+			placeInputElement(this.element, rect, cursor)
 		}
 	}
 
@@ -520,7 +532,7 @@ class TextareaInput implements TextInput {
 
 	private position() {
 		let rect = this.host.surface.getBoundingClientRect(), cursor = this.host.cursorRect()
-		if (cursor) this.element.style.transform = `translate(${cursor.left - rect.left}px, ${cursor.top - rect.top}px)`
+		if (cursor) placeInputElement(this.element, rect, cursor)
 	}
 
 	private onInput = (e: Event) => {

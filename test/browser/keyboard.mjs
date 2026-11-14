@@ -149,6 +149,47 @@ await page.evaluate(() => {
 after = await caret()
 check("keyboard close clears the inset", after.inset == 0, JSON.stringify(after))
 
+// canvas-view#5: the input element follows the cursor, but stays inside
+// the scroller when the cursor is off screen (scrolled away, or below
+// an editor the keyboard just shrank). Past its edges the browser
+// scrolled the scroller itself to show the focused element (Android on
+// keyboard open), moving the canvas up and leaving a blank band.
+const nativeScroll = () => page.evaluate(() => {
+	let d = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")
+	let s = view.scrollDOM.getBoundingClientRect(), c = view.canvas.getBoundingClientRect(), i = view.input.element.getBoundingClientRect()
+	return {native: d.get.call(view.scrollDOM), canvasTop: c.top - s.top, canvasBottom: c.bottom - s.bottom,
+		inputTop: i.top - s.top, inputBottom: i.bottom - s.bottom, height: s.height}
+})
+await page.evaluate(() => {
+	view.focus()
+	view.dispatch({selection: {anchor: view.state.doc.line(300).from}, scrollIntoView: true})
+})
+await frames()
+await page.evaluate(() => { view.scrollTop = view.lineTop(20) })
+await frames()
+// A selection update repositions the input element (the cursor is still off screen).
+await page.evaluate(() => view.dispatch({selection: {anchor: view.state.selection.main.head + 1}}))
+await frames()
+let off = await nativeScroll()
+check("the input element stays inside the scroller with the cursor off screen",
+	off.inputTop >= 0 && off.inputBottom <= 0.5 && off.native == 0, JSON.stringify(off))
+await page.evaluate(() => view.input.element.scrollIntoView())
+await frames()
+off = await nativeScroll()
+check("the scroller doesn't scroll to show the focused input element", off.native == 0 && off.canvasTop == 0, JSON.stringify(off))
+// Anything else scrolling it natively (a child past its edges) is undone.
+await page.evaluate(() => {
+	let probe = document.createElement("div")
+	probe.style.cssText = "position: absolute; top: 2000px; left: 0; width: 1px; height: 1px"
+	view.scrollDOM.appendChild(probe)
+	probe.scrollIntoView()
+	window.probe = probe
+})
+await frames()
+off = await nativeScroll()
+await page.evaluate(() => window.probe.remove())
+check("a native scroll of the scroller is undone", off.native == 0 && off.canvasTop == 0 && off.canvasBottom == 0, JSON.stringify(off))
+
 await browser.close()
 server.close()
 console.log(`\n${passes} passed, ${failures} failed (${backend})`)

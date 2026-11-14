@@ -1127,7 +1127,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		this.vp.last = -1
 		this.scrollTop = this.top
 		this.scrollLeft = this.left
-		this.plugins = new PluginHost(this)
+		this.plugins = new PluginHost(this, this.plugins)
 		this.plugins.init()
 		this.syncLineHeight()
 		this.syncWritable()

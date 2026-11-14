@@ -184,7 +184,15 @@ export class PluginHost {
 	/// Bumped when the set of plugins changes.
 	specsVersion = 0
 
-	constructor(private view: CompatView) {}
+	/// `prev` is the host of the state being replaced (`setState`): the
+	/// classes and attributes it put on the editor are taken over, so
+	/// the ones the new state doesn't have (its old theme's) are removed.
+	constructor(private view: CompatView, prev?: PluginHost) {
+		if (prev) {
+			this.classes = prev.classes
+			this.attrs = prev.attrs
+		}
+	}
 
 	get isUpdating() { return this.updating }
 

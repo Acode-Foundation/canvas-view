@@ -270,6 +270,11 @@ const TOUCH_EDGE = 0.35
 const SCROLLBAR = 4
 /// Far-reaching rects: clipped by the pass, independent of scroll.
 const FAR = 1e6
+/// How long the visual viewport must stay still before the caret is
+/// moved above an overlaying keyboard (ms): longer than the window
+/// resize lagging the viewport under `adjustResize`, well within the
+/// keyboard's own animation.
+const KEYBOARD_SETTLE = 150
 
 // GPU context loss: how long to wait for a WebGL2 restore before
 // replacing the canvas, the window for backing off repeated losses,
@@ -3769,8 +3774,13 @@ export class CanvasView implements ScrollHost, InputHost {
 		this.scrollLeft = this.left
 		this.updateKeyboardInset(false)
 		// A keyboard opening with `resizes-content` shrinks the editor:
-		// keep the caret in view, like native editors.
-		if (shrank && this.hasFocus) this.scrollPosIntoView(this.state.selection.main.head)
+		// keep the caret in view, like native editors. With an inset from
+		// the visual viewport as well, the visible height isn't settled
+		// (see updateKeyboardInset): reveal it once it is.
+		if (shrank && this.hasFocus) {
+			if (this.bottomInset > 0) this.deferReveal()
+			else this.scrollPosIntoView(this.state.selection.main.head)
+		}
 		if (!this.plugins.isUpdating) this.applyUpdate([], 16)
 		// Reallocating the canvas cleared it, and ResizeObserver callbacks
 		// run after the frame's animation callbacks, right before paint:
@@ -3796,8 +3806,25 @@ export class CanvasView implements ScrollHost, InputHost {
 		let grew = inset > this.bottomInset
 		this.bottomInset = inset
 		this.scrollTop = this.top
-		if (grew && keepCaret && this.hasFocus) this.scrollPosIntoView(this.state.selection.main.head)
+		// Keep the caret above an overlaying keyboard once the viewport has
+		// settled, not on every step. With `adjustResize` (Acode, Cordova)
+		// Android WebView reports a visual viewport shorter than the resized
+		// window for a few frames (the keyboard counted twice): scrolling for
+		// that made the text jump up and back on every tap that opened the
+		// keyboard.
+		if ((grew && keepCaret && this.hasFocus) || this.revealTimer != null) this.deferReveal()
 		this.requestFrame()
+	}
+
+	/// Keep the caret in view once the viewport has been still for
+	/// `KEYBOARD_SETTLE` (each change restarts the wait).
+	private revealTimer: ReturnType<typeof setTimeout> | null = null
+	private deferReveal() {
+		if (this.revealTimer != null) clearTimeout(this.revealTimer)
+		this.revealTimer = setTimeout(() => {
+			this.revealTimer = null
+			if (!this.destroyed && this.hasFocus) this.scrollPosIntoView(this.state.selection.main.head)
+		}, KEYBOARD_SETTLE)
 	}
 
 	private onViewportChange = () => this.updateKeyboardInset()
@@ -3850,6 +3877,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		if (this.idleTimer != null) clearTimeout(this.idleTimer)
 		if (this.recoveryTimer != null) clearTimeout(this.recoveryTimer)
 		if (this.gutterClassTimer != null) clearTimeout(this.gutterClassTimer)
+		if (this.revealTimer != null) clearTimeout(this.revealTimer)
 		this.plugins.destroy()
 		this.classReader.destroy()
 		this.decos.destroy()

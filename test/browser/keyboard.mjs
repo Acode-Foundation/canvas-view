@@ -94,7 +94,35 @@ await page.evaluate(() => {
 await frames()
 after = await caret()
 check("overlay: keyboard inset is measured", Math.abs(after.inset - 340) < 2, JSON.stringify(after))
+// The caret moves above it once the viewport has settled.
+await sleep(250)
+await frames()
+after = await caret()
 check("overlay: caret moves above the keyboard", after.bottom <= after.visibleBottom, JSON.stringify(after))
+
+// Android WebView with adjustResize (Acode): for a few frames the visual
+// viewport is shorter than the already-resized window (the keyboard
+// counted twice). The text must not scroll for that and back.
+await page.evaluate(() => Object.assign(window.visualViewport, {height: innerHeight}) && view.onViewportChange())
+await caretNearBottom()
+await sleep(300)
+let glitch = await page.evaluate(async () => {
+	let tops = [view.scrollTop], sample = () => tops.push(view.scrollTop)
+	Object.assign(window.visualViewport, {height: innerHeight - view.height + view.lineHeight * 3})
+	view.onViewportChange()
+	for (let t = performance.now(); performance.now() - t < 40;) { await new Promise(r => requestAnimationFrame(r)); sample() }
+	Object.assign(window.visualViewport, {height: innerHeight})
+	view.onViewportChange()
+	for (let t = performance.now(); performance.now() - t < 300;) { await new Promise(r => requestAnimationFrame(r)); sample() }
+	return {tops: [...new Set(tops)], inset: view.bottomInset}
+})
+check("a transient viewport inset doesn't scroll the text", glitch.tops.length == 1 && glitch.inset == 0, JSON.stringify(glitch))
+await page.evaluate(() => {
+	Object.assign(window.visualViewport, {height: innerHeight - 340})
+	view.onViewportChange()
+})
+await sleep(250)
+await frames()
 
 // The last line can be scrolled above the keyboard.
 let end = await page.evaluate(() => {

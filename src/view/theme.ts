@@ -32,6 +32,10 @@ export interface CanvasThemeSpec {
 	gutterActiveForeground?: string
 	gutterBorder?: string
 	activeLine?: string
+	/// A frame around the active line (CSS px wide, default 1), like a
+	/// theme's `box-shadow: 0 0 0 2px inset` on `.cm-activeLine`.
+	activeLineBorder?: string
+	activeLineBorderWidth?: number
 	activeLineGutter?: string
 	selection?: string
 	cursor?: string
@@ -80,6 +84,9 @@ export class CanvasTheme {
 	readonly gutterActiveForeground: PackedColor
 	readonly gutterBorder: PackedColor
 	readonly activeLine: PackedColor
+	/// 0 for no frame.
+	readonly activeLineBorder: PackedColor
+	readonly activeLineBorderWidth: number
 	readonly activeLineGutter: PackedColor
 	readonly selection: PackedColor
 	readonly cursor: PackedColor
@@ -108,6 +115,8 @@ export class CanvasTheme {
 		this.gutterActiveForeground = c(spec.gutterActiveForeground, spec.foreground)
 		this.gutterBorder = c(spec.gutterBorder, "transparent")
 		this.activeLine = c(spec.activeLine, this.dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)")
+		this.activeLineBorder = c(spec.activeLineBorder, "transparent")
+		this.activeLineBorderWidth = spec.activeLineBorderWidth ?? 1
 		this.activeLineGutter = c(spec.activeLineGutter, spec.activeLine ?? "transparent")
 		this.selection = c(spec.selection, this.dark ? "rgba(62,68,81,0.9)" : "rgba(170,200,255,0.6)")
 		this.cursor = c(spec.cursor, this.dark ? "#528bff" : "#000")

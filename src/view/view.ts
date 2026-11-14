@@ -2766,7 +2766,7 @@ export class CanvasView implements ScrollHost, InputHost {
 			this.atlas.generation, this.composition, this.touchSelection.version, this.lines.version, foldedRanges(this.state), this.focused,
 			this.gutterHover, syntaxTree(this.state), this.config.placeholder, this.config.highlightActiveLine, this.config.cursorWidth,
 			this.config.cursorStyle, this.config.bracketPairGuides, this.bracketPairs(), ...this.vimKey(),
-			this.relativeNumbers, this.dropPos, ...this.markerKey()]
+			this.relativeNumbers, this.dropPos, this.maxCols, ...this.markerKey()]
 		if (key.some((v, i) => v !== this.dynKey[i])) {
 			this.dynKey = key
 			this.buildSelectionLayers()
@@ -2870,8 +2870,23 @@ export class CanvasView implements ScrollHost, InputHost {
 			if (!vl.cover && !active.has(vl.first)) active.set(vl.first, {row: lines.rowOf(vl.first), rows: vl.rows})
 		}
 		let highlightActive = this.config.highlightActiveLine ?? true
-		if (highlightActive) for (let {row, rows} of active.values())
-			if (row + rows > first && row <= last) pushRect(under, -FAR, rowY(row), 2 * FAR, rows * lh, t.activeLine)
+		// A framed active line is drawn like CodeMirror's `.cm-line` box:
+		// from the text area's left edge (scrolling with the text) to the
+		// content's right end.
+		let frame = t.activeLineBorder >>> 24 ? t.activeLineBorder : 0, bw = t.activeLineBorderWidth
+		let frameLeft = this.gutterWidth - this.contentLeft, frameRight = this.maxScrollLeft + this.width - this.contentLeft
+		if (highlightActive) for (let {row, rows} of active.values()) {
+			if (row + rows <= first || row > last) continue
+			let y = rowY(row), h = rows * lh
+			pushRect(under, -FAR, y, 2 * FAR, h, t.activeLine)
+			if (frame) {
+				let w = frameRight - frameLeft
+				pushRect(under, frameLeft, y, w, bw, frame)
+				pushRect(under, frameLeft, y + h - bw, w, bw, frame)
+				pushRect(under, frameLeft, y + bw, bw, h - 2 * bw, frame)
+				pushRect(under, frameRight - bw, y + bw, bw, h - 2 * bw, frame)
+			}
+		}
 		for (let range of sel.ranges) {
 			if (range.empty) continue
 			this.rangeRows(range.from, range.to, first, last, true, (row, x1, x2) =>

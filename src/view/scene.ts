@@ -282,31 +282,31 @@ export class Scene {
 			if (lineNumbers) for (let k = first; k <= last; k++)
 				if (!this.gutterSegs.has(k) && !lines.hidden(k) && !lines.covered(k)) this.emitNumber(k)
 		}
-		let recheck = (from: number, to: number) => {
-			if (ready.last < ready.first) return
-			let a = Math.max(ready.first, from > doc.length ? ready.last + 1 : lines.vlineStart(doc.lineAt(Math.min(from, doc.length)).number))
-			let b = Math.min(ready.last, doc.lineAt(Math.min(to, doc.length)).number)
+		// Re-emit the lines `a..b` that are already in the scene.
+		let recheck = (a: number, b: number, force: boolean) => {
+			a = Math.max(ready.first, a)
+			b = Math.min(ready.last, b)
 			if (a > b) return
 			for (let n = a; n <= b; n++) {
 				let seg = this.segments.get(n)
-				if (seg) seg.stamp = -1
+				if (!seg) continue
+				seg.stamp = -1
+				if (force) seg.forced = true
 			}
 			process(a, b)
 		}
-		// New highlighting: re-check just the affected lines that are
-		// already in the scene.
-		if (changed) recheck(changed.from, changed.to)
+		// New highlighting: re-check just the affected lines.
+		if (changed && ready.last >= ready.first && changed.from <= doc.length)
+			recheck(lines.vlineStart(doc.lineAt(changed.from).number), doc.lineAt(Math.min(changed.to, doc.length)).number, false)
 		if (this.forced.length) {
-			let f = this.forced
+			// One range per changed decoration (RangeSet.compare): a search
+			// for "a" gives hundreds on one long line. Merged into line
+			// spans, so each line is emitted once, not once per range
+			// (Acode #3060: 416 emits of a 10k-char line, 1.5s at 6×).
+			let spans = forcedSpans(this.forced, doc, lines)
 			this.forced = []
-			for (let i = 0; i < f.length; i += 2) {
-				let a = doc.lineAt(Math.min(f[i], doc.length)).number, b = doc.lineAt(Math.min(f[i + 1], doc.length)).number
-				for (let n = Math.max(ready.first, lines.vlineStart(a)), e = Math.min(b, ready.last); n <= e; n++) {
-					let seg = this.segments.get(n)
-					if (seg) seg.forced = true
-				}
-				recheck(f[i], f[i + 1])
-			}
+			if (ready.last >= ready.first)
+				for (let i = 0; i < spans.length; i += 2) recheck(spans[i], spans[i + 1], true)
 		}
 		// Partially emitted lines that no longer cover what's visible.
 		if (this.partial.size) {
@@ -1034,6 +1034,25 @@ function blankRects(buf: InstanceBuffer, from: number, count: number) {
 	if (!count) return
 	for (let i = from; i < from + count; i++) buf.u32[i * RECT_STRIDE + 4] = 0
 	buf.touch(from)
+}
+
+/// The visual lines touched by `ranges` (flat [from, to] document
+/// position pairs), as sorted, merged [first, last] line number pairs.
+/// Ranges past the document's end are dropped.
+export function forcedSpans(ranges: readonly number[], doc: Text, lines: Pick<LineModel, "vlineStart">): number[] {
+	let spans: [number, number][] = []
+	for (let i = 0; i < ranges.length; i += 2) {
+		if (ranges[i] > doc.length) continue
+		spans.push([lines.vlineStart(doc.lineAt(ranges[i]).number), doc.lineAt(Math.min(ranges[i + 1], doc.length)).number])
+	}
+	spans.sort((x, y) => x[0] - y[0])
+	let out: number[] = []
+	for (let [a, b] of spans) {
+		let last = out.length - 1
+		if (last > 0 && a <= out[last] + 1) out[last] = Math.max(out[last], b)
+		else out.push(a, b)
+	}
+	return out
 }
 
 export function sameRuns(a: LineRuns | null, b: LineRuns | null) {

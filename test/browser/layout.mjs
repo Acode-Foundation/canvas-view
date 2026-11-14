@@ -1578,6 +1578,52 @@ async function open(query) {
 	await page.close()
 }
 
+// Many marks changing on one long line (a search for "a", Acode #3060)
+// re-emit the line once, not once per mark.
+for (let wrap of [1, 0]) {
+	let t = await open(`kind=js&lines=30&wrap=${wrap}`), page = t.page
+	let r = await page.evaluate(async () => {
+		let {StateEffect, StateField, Decoration, EditorView} = cmApi
+		let frames = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+		let l = view.state.doc.line(3)
+		view.dispatch({changes: {from: l.from, to: l.to, insert: "ab ".repeat(1000)}})
+		let setOn = StateEffect.define(), mark = Decoration.mark({class: "cm-searchMatch"})
+		let field = StateField.define({
+			create: () => Decoration.none,
+			update(v, tr) {
+				for (let e of tr.effects) if (e.is(setOn)) {
+					let line = tr.state.doc.line(3), out = []
+					if (e.value) for (let i = 0; i < line.length; i += 3) out.push(mark.range(line.from + i, line.from + i + 1))
+					v = Decoration.set(out)
+				}
+				return v.map(tr.changes)
+			},
+			provide: f => EditorView.decorations.from(f)
+		})
+		view.dispatch({effects: StateEffect.appendConfig.of(field)})
+		await frames()
+		let sc = view.scene, emit = sc.emitLine, emits = 0
+		sc.emitLine = function () { emits++; return emit.apply(this, arguments) }
+		let res = {}
+		for (let on of [true, false]) {
+			emits = 0
+			view.dispatch({effects: setOn.of(on)})
+			await frames()
+			let seg = sc.segments.get(3)
+			res[on ? "on" : "off"] = {emits, rects: seg?.rN, complete: seg?.complete, cols: [seg?.colFrom, seg?.colTo]}
+		}
+		sc.emitLine = emit
+		return res
+	})
+	let name = `decorations (${wrap ? "wrapped" : "unwrapped"}): 1000 marks on a long line`
+	check(`${name} re-emit it once`, r.on.emits <= 2 && r.off.emits <= 2, JSON.stringify(r))
+	// Wrapped, the line is emitted whole: a background rect per mark.
+	if (wrap) check(`${name} are all drawn, then removed`, r.on.complete && r.on.rects >= 1000 && r.off.rects < 100, JSON.stringify(r))
+	else check(`${name} are drawn in the column window`, r.on.rects > r.off.rects + (r.on.cols[1] - r.on.cols[0]) / 3 - 2, JSON.stringify(r))
+	check(`${name}: no page errors`, !t.errors.length, t.errors.join("; "))
+	await page.close()
+}
+
 await browser.close()
 server.close()
 console.log(`\n${passes} passed, ${failures} failed (${backend})`)

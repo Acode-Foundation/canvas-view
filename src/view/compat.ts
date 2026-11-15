@@ -40,7 +40,7 @@ const themeFacet: Facet<string, string> | null = (() => {
 
 /// CodeMirror's generated base theme class names ("ͼ1", "ͼ2", "ͼ3"),
 /// recovered from a probe base theme's rules.
-const baseClasses = (() => {
+export const baseClasses = (() => {
 	let ids = {base: "", light: "", dark: ""}
 	let found = findProvider(EditorView.baseTheme({"&": {"--cv": "base"}, "&light": {"--cv": "light"}, "&dark": {"--cv": "dark"}}),
 		p => p.value instanceof StyleModule)
@@ -151,7 +151,7 @@ export const canvasBaseTheme = EditorView.baseTheme({
 	".cm-vimCursorLayer": {display: "none !important"}
 })
 
-const canvasBaseModule: StyleModule = findProvider(canvasBaseTheme, p => p.value instanceof StyleModule).value
+export const canvasBaseModule: StyleModule = findProvider(canvasBaseTheme, p => p.value instanceof StyleModule).value
 
 export interface MeasureRequest<T> {
 	read(view: any): T
@@ -163,6 +163,14 @@ interface Instance {
 	spec: {plugin: ViewPlugin<any, any>, arg: any} | null
 	value: any
 	mustUpdate: ViewUpdate | null
+}
+
+/// CodeMirror's theme classes for a state's editor element: the base
+/// theme's, its light or dark variant's, and those of `EditorView.theme`
+/// extensions.
+export function themeClassesOf(state: EditorState) {
+	return baseClasses.base + " " + (state.facet(EditorView.darkTheme) ? baseClasses.dark : baseClasses.light) +
+		(themeFacet ? " " + state.facet(themeFacet) : "")
 }
 
 /// What the host needs from the view (it is the `EditorView` plugins see).
@@ -356,11 +364,7 @@ export class PluginHost {
 	}
 
 	/// CodeMirror's theme classes for the editor element.
-	get themeClasses() {
-		let state = this.view.state
-		return baseClasses.base + " " + (state.facet(EditorView.darkTheme) ? baseClasses.dark : baseClasses.light) +
-			(themeFacet ? " " + state.facet(themeFacet) : "")
-	}
+	get themeClasses() { return themeClassesOf(this.view.state) }
 
 	private mountStyles() {
 		let modules = this.view.state.facet(EditorView.styleModule)

@@ -11,7 +11,8 @@ import {type FontMetrics, type FontSpec, measureFont} from "../core/metrics"
 import {WebGL2Backend} from "../core/webgl2"
 import {WebGPUBackend} from "../core/webgpu"
 import {darkRainbow, lightRainbow, RainbowBrackets} from "./brackets"
-import {domViews, type MeasureRequest, nativeEquivalents, PluginHost, wantsLineWrapping} from "./compat"
+import {baseClasses, domViews, type MeasureRequest, nativeEquivalents, PluginHost, themeClassesOf, wantsLineWrapping} from "./compat"
+import {cssThemeSpec, type ThemeCSS, themeCSSOf} from "./csstheme"
 import {skipAtomicRanges, skipAtomsForSelection} from "./atomic"
 import {BlockLayer} from "./blocks"
 import {type CanvasWidgetSpec, DecoState, type PointDeco} from "./decorations"
@@ -26,7 +27,7 @@ import {Scene, sameRuns, type TextStyle, type TokenDeco} from "./scene"
 import {ScrollController, type ScrollHost} from "./scroll"
 import {indentWidth, ScopeFinder, type StickyHeaders, type StickyRows} from "./sticky"
 import {type LineRuns, SyntaxDriver} from "./syntax"
-import {CanvasTheme, type CanvasThemeSpec, darkTheme} from "./theme"
+import {CanvasTheme, type CanvasThemeSpec} from "./theme"
 import {ClassStyleReader, sameHighlighters, stateHighlighters} from "./highlight"
 import type {Highlighter} from "@lezer/highlight"
 import {TouchSelection, type TouchSelectionConfig, mac} from "./touchselect"
@@ -53,7 +54,20 @@ export interface CanvasViewConfig {
 	/// `.cm-line` (e.g. through `EditorView.theme`). Fonts without
 	/// ligatures cost nothing either way.
 	fontLigatures?: boolean
-	theme?: CanvasThemeSpec
+	/// The canvas theme. Without one, colors follow the state's
+	/// CodeMirror themes like a DOM editor's: background, text color,
+	/// cursor, selection, active line and gutter are resolved from the
+	/// `EditorView.theme` style modules (no DOM is involved), with the
+	/// built-in dark or light theme for what they leave out.
+	/// A function gets that CSS-resolved theme and returns the one to
+	/// use (to override or add colors); it runs again when the state's
+	/// themes change.
+	theme?: CanvasThemeSpec | ((css: CanvasThemeSpec) => CanvasThemeSpec)
+	/// More CSS for the styles the view resolves itself (theme colors,
+	/// highlight and decoration classes, gutter element classes),
+	/// applied after the state's style modules: rules a page stylesheet
+	/// has for the editor, which the view can't see.
+	themeCSS?: string
 	/// Which GPU API to use. "auto" uses WebGL2, the most widely
 	/// available; "webgpu" falls back to WebGL2 when unavailable.
 	backend?: "auto" | BackendKind
@@ -477,9 +491,14 @@ export class CanvasView implements ScrollHost, InputHost {
 		this.relativeNumbers = config.lineNumbers == "relative"
 		let past = config.scrollPastEnd ?? true
 		this.scrollPastEnd = past === true ? 1 : past === false ? 0 : Math.max(0, Math.min(1, past))
-		this.theme = new CanvasTheme(config.theme ?? darkTheme)
+		this.themeSource = config.theme ?? null
+		this.css = this.makeCSS()
+		this.theme = new CanvasTheme(this.themeSpec())
 		this.layouts = new LineLayouts(() => this.atlas, this.tabSize)
-		this.decos = new DecoState(cls => this.theme.classStyle(cls), () => this.theme.dark)
+		// Built-in classes keep their defaults unless a theme (not a
+		// base theme) styles them; others take any rule there is.
+		this.decos = new DecoState(cls => this.theme.classStyle(cls), () => this.theme.dark,
+			(cls, builtin) => this.css.mark(cls, builtin ? baseClasses.base : ""))
 		this.decos.onWidgetChange = ranges => this.widgetsChanged(ranges)
 		let view = this
 		this.lines = new LineModel({
@@ -984,6 +1003,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		}
 		this.plugins.update(vu)
 		if (reconfigured) {
+			this.syncCSS()
 			this.syncLineHeight()
 			this.syncHighlighting()
 			this.syncWrapping()
@@ -1147,6 +1167,7 @@ export class CanvasView implements ScrollHost, InputHost {
 		this.scrollLeft = this.left
 		this.plugins = new PluginHost(this, this.plugins)
 		this.plugins.init()
+		this.syncCSS()
 		this.syncLineHeight()
 		this.syncWritable()
 		this.markerFades.clear()
@@ -2121,6 +2142,7 @@ export class CanvasView implements ScrollHost, InputHost {
 
 	private draw(time: number) {
 		if (this.destroyed || !this.backend) return
+		if (this.css.pending && this.dom.isConnected) this.syncCSS()
 		if (this.lineHeightUnread && this.dom.isConnected) this.syncLineHeight()
 		if (this.stylesPending && this.dom.isConnected) {
 			this.stylesPending = false
@@ -2394,7 +2416,9 @@ export class CanvasView implements ScrollHost, InputHost {
 		let style = this.classStyles[id]
 		if (style == null) {
 			let cls = this.syntax.classes[id]
-			let tok = this.highlighters ? this.classReader.read(cls) : this.theme.tokenStyle(cls)
+			// From the style modules; classes they don't define (a page
+			// stylesheet's) are read from a hidden element.
+			let tok = this.highlighters ? this.css.token(cls) ?? this.classReader.read(cls) : this.theme.tokenStyle(cls)
 			if (!tok) {
 				this.stylesPending = true
 				return this.defaultStyle
@@ -2710,6 +2734,11 @@ export class CanvasView implements ScrollHost, InputHost {
 			let color = parseColor(themed)
 			this.gutterClassColors.set(key, color)
 			return color
+		}
+		let split = key.indexOf("\0"), css = this.css.gutterElement(key.slice(0, split), key.slice(split + 1))
+		if (css !== undefined) {
+			this.gutterClassColors.set(key, css)
+			return css
 		}
 		this.gutterClassPending.add(key)
 		this.gutterClassTimer ??= setTimeout(() => this.readGutterClasses(), 0)
@@ -3687,7 +3716,50 @@ export class CanvasView implements ScrollHost, InputHost {
 		this.scene.reset(this.scene.origin)
 	}
 
-	setTheme(spec: CanvasThemeSpec) {
+	private themeSource: CanvasThemeSpec | ((css: CanvasThemeSpec) => CanvasThemeSpec) | null
+	private css: ThemeCSS
+	private cssKey: unknown[] = []
+
+	/// The editor's CSS as far as the view draws it, resolved from the
+	/// state's style modules (see `StyleSheetModel`).
+	private makeCSS() {
+		let extra = this.config.themeCSS
+		this.cssKey = [this.state.facet(EditorView.styleModule), themeClassesOf(this.state), extra]
+		return themeCSSOf(this.state, extra, name => {
+			// Custom properties the page sets: only the real element has them.
+			if (!this.dom?.isConnected) return undefined
+			return getComputedStyle(this.dom).getPropertyValue(name).trim() || null
+		})
+	}
+
+	private cssThemeSpec() { return cssThemeSpec(this.state, this.css) }
+
+	private themeSpec(): CanvasThemeSpec {
+		let source = this.themeSource
+		return !source ? this.cssThemeSpec() : typeof source == "function" ? source(this.cssThemeSpec()) : source
+	}
+
+	/// Follow the state's style modules and theme classes (after
+	/// reconfiguration, `setState`, and once custom properties can be
+	/// read). Never in a frame, except the first one in the document.
+	private syncCSS() {
+		let key = [this.state.facet(EditorView.styleModule), themeClassesOf(this.state), this.config.themeCSS]
+		if (sameKey(key, this.cssKey) && !(this.css.pending && this.dom.isConnected)) return
+		this.css = this.makeCSS()
+		if (typeof this.themeSource != "object" || !this.themeSource) this.applyTheme(this.themeSpec())
+		else this.resetStyles()
+		this.requestFrame()
+	}
+
+	/// Set the canvas theme: a spec, a function of the CSS-resolved
+	/// theme, or null to follow the state's CodeMirror themes (see the
+	/// `theme` option).
+	setTheme(spec: CanvasThemeSpec | ((css: CanvasThemeSpec) => CanvasThemeSpec) | null) {
+		this.themeSource = spec
+		this.applyTheme(this.themeSpec())
+	}
+
+	private applyTheme(spec: CanvasThemeSpec) {
 		this.theme = new CanvasTheme(spec)
 		this.syncBackground()
 		this.syncTransparency()

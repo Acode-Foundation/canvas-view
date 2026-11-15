@@ -144,7 +144,34 @@ export class DecoState {
 	private observer = typeof MutationObserver == "undefined" ? null : new MutationObserver(recs => this.domChanged(recs))
 	private view: EditorView | null = null
 
-	constructor(private classStyle: (cls: string) => MarkStyle | null, private dark: () => boolean) {}
+	/// `classStyle`: the theme's own style for a class, which wins.
+	/// `cssStyle`: what the editor's CSS says about it (`builtin`: the
+	/// classes of one element, `builtin`: one has a default here), laid
+	/// over the built-in defaults.
+	constructor(private classStyle: (cls: string) => MarkStyle | null, private dark: () => boolean,
+		private cssStyle: (cls: string, builtin: boolean) => MarkStyle | null = () => null) {}
+
+	/// The style of an element with these classes: built-in defaults,
+	/// under the CSS's rules for the classes together (so
+	/// `.cm-searchMatch.cm-searchMatch-selected` applies), under the
+	/// theme's own `classes`.
+	private styleOf(classes: string): MarkStyle | null {
+		let style = null as MarkStyle | null, themed = null as MarkStyle | null, builtin = false, list = ""
+		let defaults = this.dark() ? darkDefaults : lightDefaults
+		for (let c of classes.split(" ")) {
+			if (!c || ignoredClasses.has(c)) continue
+			list += (list ? " " : "") + c
+			let own = this.classStyle(c), def = own ? null : defaults[c]
+			if (own) themed = {...themed, ...own}
+			else if (def) {
+				style = {...style, ...def}
+				builtin = true
+			}
+		}
+		let css = list ? this.cssStyle(list, builtin) : null
+		if (css) style = {...style, ...css}
+		return themed ? {...style, ...themed} : style
+	}
 
 	get empty() { return this.sets.length == 0 }
 
@@ -333,7 +360,7 @@ export class DecoState {
 		let style: MarkStyle | null = null
 		let merge = (s: MarkStyle | null) => { if (s) style = {...style, ...s} }
 		let cls = spec.class ?? spec.attributes?.class
-		if (cls) for (let c of cls.split(" ")) if (c && !ignoredClasses.has(c)) merge(this.classStyle(c) ?? (this.dark() ? darkDefaults : lightDefaults)[c] ?? null)
+		if (cls) merge(this.styleOf(cls))
 		if (spec.attributes?.style) merge(parseInlineStyle(spec.attributes.style))
 		if (spec.canvas) merge(spec.canvas)
 		let result = style ? resolveMark(style) : null
@@ -437,9 +464,9 @@ export class DecoState {
 			if (!c) continue
 			if (c.endsWith("-pl")) padLeft = 0.5
 			else if (c.endsWith("-pr")) padRight = 0.5
-			let s = this.classStyle(c) ?? (this.dark() ? darkDefaults : lightDefaults)[c]
-			if (s) style = {...style, ...s}
 		}
+		let classStyle = this.styleOf(cls)
+		if (classStyle) style = classStyle
 		let cells: number | undefined
 		if (dom.style?.cssText) {
 			style = {...style, ...parseInlineStyle(dom.style.cssText)}

@@ -78,6 +78,8 @@ src/
     bidi.ts        Unicode Bidi Algorithm, run reordering, visual cursor motion
     syntax.ts      time-sliced Lezer parsing and highlight runs
     highlight.ts   token colors from the state's highlighters and their CSS
+    cssresolve.ts  CSS cascade over style modules for virtual elements (no DOM)
+    csstheme.ts    theme colors, token, mark and gutter class styles from that cascade
     decorations.ts EditorView.decorations → mark styles, points, joins, widget labels
     compat.ts      hosts CodeMirror ViewPlugins, ViewUpdates, measure requests, themes
     gutters.ts     CodeMirror gutter() configs → drawn marker columns

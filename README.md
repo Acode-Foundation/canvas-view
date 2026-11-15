@@ -109,7 +109,8 @@ run against it unchanged.
 | --- | --- | --- |
 | `parent` | | Element to append `view.dom` to |
 | `state` / `doc` / `extensions` | | The `EditorState`, or a doc and extensions to make one |
-| `theme` | `darkTheme` | A `CanvasThemeSpec` (see [Theming](#theming)) |
+| `theme` | the state's themes | A `CanvasThemeSpec` (see [Theming](#theming)); without one, the state's `EditorView.theme` colors, or `darkTheme` when it has none |
+| `themeCSS` | | CSS text resolved after the state's style modules |
 | `font` | monospace, 14px | `{family, size, lineHeight}`. Without `lineHeight`, rows are as tall as CodeMirror's (`.cm-line` CSS line height) |
 | `fontLigatures` | from the CSS (on) | Draw the font's ligatures (`=>`, `!==`) like DOM text; off with `false`, or with `font-variant-ligatures: none` in the editor's CSS |
 | `backend` | `"auto"` (WebGL2) | `"webgl2"` or `"webgpu"` (falls back to WebGL2) |
@@ -158,6 +159,26 @@ Besides the `EditorView` members:
 
 ## Theming
 
+Without a `theme` option the view follows the state's CodeMirror themes,
+like a DOM editor: background, text color, cursor, selection, active
+line (a fill, or a frame from an inset `box-shadow` or an outline) and
+gutter colors come from the `EditorView.theme` rules, and highlight,
+decoration and gutter element classes from the same CSS. The rules are
+resolved from the style modules themselves, with no hidden DOM. Rules
+in a page stylesheet aren't seen; pass them as `themeCSS` (CSS text),
+or use a canvas theme. `view.setTheme(null)` goes back to following the
+CSS. A function as `theme` gets the CSS-resolved theme and returns the
+one to use, and runs again when the state's themes change:
+`theme: css => ({...css, scrollbar: "transparent"})`. `cssThemeSpec(state)`
+and `themeCSSOf(state)` resolve a state's theme without a view.
+
+```ts
+import {oneDark} from "@codemirror/theme-one-dark"
+new CanvasView({state: EditorState.create({doc, extensions: [oneDark]}), parent})
+```
+
+An explicit theme is used as given:
+
 A `CanvasThemeSpec` has colors (`background`, `foreground`, `selection`,
 `cursor`, `activeLine`, gutter colors, `indentGuide`,
 `stickyBackground`...), `dark`, an optional `highlight` (a CodeMirror
@@ -170,8 +191,9 @@ parts (tooltips, panels, autocomplete).
 ### Decorations and widgets
 
 ```ts
-// Mark styles come from the theme's `classes`, built-in defaults for
-// CodeMirror's own classes, or the decoration itself.
+// Mark styles come from the theme's `classes`, the editor's CSS (theme
+// rules for the class), built-in defaults for CodeMirror's own classes,
+// or the decoration itself.
 Decoration.mark({class: "my-match", canvas: {background: "#ff03", underline: "wavy", underlineColor: "red"}})
 
 // Inline widgets draw their toDOM() text by default, or draw themselves.

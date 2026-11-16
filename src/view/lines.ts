@@ -469,12 +469,44 @@ export class LineModel {
 			let c = d % 2 ? center + (d + 1) / 2 : center - d / 2
 			if (c < 0 || c >= n || map.isValid(c)) continue
 			if (performance.now() > deadline) { res.done = false; break }
-			let {first, len} = map.chunkLines(c)
-			let m = this.measure(first, first + len - 1, anchor)
+			let m = this.measurePart(c, anchor, deadline)
 			res.above += m.above
 			res.total += m.total
+			if (!m.done) { res.done = false; break }
 		}
 		if (res.done) this.dirty = false
+		return res
+	}
+
+	/// Where idle measuring stopped inside a chunk: the next line, while
+	/// the row map's structure (`gen`) is unchanged.
+	private idleAt: {gen: number, line: number} | null = null
+
+	/// Measure chunk `c` line by line, from where an earlier slice
+	/// stopped, until `deadline`. Whole chunks of long wrapped lines with
+	/// widgets took 10-16ms on a phone, against a 4ms budget, and landed
+	/// on the end of a fling or the next touch.
+	private measurePart(c: number, anchor: number, deadline: number) {
+		let map = this.map!, doc = this.host.doc, res = {above: 0, total: 0, done: true}
+		let {first, len} = map.chunkLines(c), last = first + len - 1
+		let at = this.idleAt, start = at && at.gen == map.gen && at.line > first && at.line <= last ? at.line : first
+		let pos = doc.line(start).from, n = start
+		for (let iter = doc.iterLines(start, last + 1); !iter.next().done; n++) {
+			if (n > start && (n - start) % 16 == 0 && performance.now() > deadline) { res.done = false; break }
+			let text = iter.value, delta = map.setIn(c, n - first, this.lineRows(n, text, pos))
+			pos += text.length + 1
+			if (delta) {
+				res.total += delta
+				if (n < anchor) res.above += delta
+			}
+		}
+		if (res.done) {
+			map.markValid(c)
+			this.idleAt = null
+		} else {
+			this.idleAt = {gen: map.gen, line: n}
+		}
+		if (res.total) this.version++
 		return res
 	}
 

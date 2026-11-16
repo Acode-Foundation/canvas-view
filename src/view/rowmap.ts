@@ -26,11 +26,15 @@ export class RowMap {
 	private dirtyFrom = 0
 	private total = 0
 	lines = 0
+	/// Bumped when lines or chunks are replaced or marked for
+	/// measurement, so a partly measured chunk knows to start over.
+	gen = 0
 
 	constructor(lines: number) { this.rebuild(lines) }
 
 	/// Reset to `lines` lines of one row each (invalid unless `valid`).
 	rebuild(lines: number, valid = false) {
+		this.gen++
 		this.chunks = []
 		for (let at = 0; at < lines; at += CHUNK) {
 			let len = Math.min(CHUNK, lines - at)
@@ -134,6 +138,7 @@ export class RowMap {
 	/// Replace `remove` lines starting at line `n` with `insert` new
 	/// lines (one row each, chunk marked invalid).
 	splice(n: number, remove: number, insert: number) {
+		this.gen++
 		let {chunk, at} = this.find(Math.min(n, this.lines + 1))
 		if (n > this.lines) {
 			chunk = this.chunks.length - 1
@@ -217,11 +222,15 @@ export class RowMap {
 	/// Mark the chunks covering lines `a`..`b` for measurement.
 	invalidate(a: number, b: number) {
 		if (!this.lines) return
+		this.gen++
 		let from = this.find(Math.max(1, a)).chunk, to = this.find(Math.min(this.lines, Math.max(a, b))).chunk
 		for (let i = from; i <= to; i++) this.chunks[i].valid = false
 	}
 
-	invalidateAll() { for (let c of this.chunks) c.valid = false }
+	invalidateAll() {
+		this.gen++
+		for (let c of this.chunks) c.valid = false
+	}
 
 	/// An independent copy (counts and validity).
 	clone() {
@@ -232,6 +241,7 @@ export class RowMap {
 
 	/// Take `other`'s counts and validity.
 	copyFrom(other: RowMap) {
+		this.gen++
 		this.chunks = other.chunks.map(c => ({...c, counts: c.counts.slice()}))
 		this.lines = other.lines
 		this.dirtyFrom = 0
@@ -258,6 +268,20 @@ export class RowMap {
 		c.rows = total
 		c.valid = true
 		if (delta) this.dirty(i + 1)
+		return delta
+	}
+
+	/// Mark chunk `i` measured (its counts were set line by line).
+	markValid(i: number) { this.chunks[i].valid = true }
+
+	/// Set the count of line `k` (0-based) of chunk `i`. Returns the
+	/// change in rows.
+	setIn(i: number, k: number, count: number) {
+		let c = this.chunks[i], delta = count - c.counts[k]
+		if (!delta) return 0
+		c.counts[k] = count
+		c.rows += delta
+		this.dirty(i + 1)
 		return delta
 	}
 

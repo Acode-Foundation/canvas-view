@@ -203,7 +203,12 @@ export class DecoState {
 		// changed ranges; re-collect those ranges, sort just the few new
 		// points, and merge. Linear in the number of points, no copies:
 		// documents can have thousands (inlay hints, code lenses).
-		let kept: PointDeco[] = [], dropped: PointDeco[] = []
+		// Whether a range crosses a line break only changes when an edit
+		// touches it, so kept points keep `joins` unless one did: a
+		// viewport update replacing a few inlay hints looked up the line
+		// of each of 1600 folded regions again (~3ms per update on a
+		// phone, several times a second during a fling).
+		let kept: PointDeco[] = [], dropped: PointDeco[] = [], recheck: Set<PointDeco> | null = null
 		if (changes || changed.length) {
 			for (let p of this.points) {
 				let from = changes ? changes.mapPos(p.from, 1) : p.from
@@ -212,6 +217,7 @@ export class DecoState {
 					if (!p.block && p.deco.spec.widget) dropped.push({...p, from})
 					continue
 				}
+				if (changes && p.to > p.from && changes.touchesRange(p.from, p.to)) (recheck ??= new Set).add(p)
 				p.from = from
 				p.to = Math.max(from, to)
 				kept.push(p)
@@ -232,26 +238,28 @@ export class DecoState {
 		fresh.sort(order)
 		let out: PointDeco[] = [], blocks = 0, covers = 0, lineEnd = -1
 		this.joins = []
-		let push = (p: PointDeco) => {
+		let push = (p: PointDeco, isKept: boolean) => {
 			// Dedupe (a point may be found by two adjacent ranges).
 			let last = out[out.length - 1]
 			if (last && last.from == p.from && last.to == p.to && last.deco == p.deco) return
 			out.push(p)
 			if (p.block || p.blockReplace) blocks++
 			if (p.blockReplace) covers++
-			p.joins = false
-			// Points are sorted: look up a line once for all its points.
-			if (p.to > p.from && p.from > lineEnd) lineEnd = doc.lineAt(p.from).to
-			if (p.to > p.from && p.to > lineEnd) {
-				p.joins = true
+			if (!isKept || recheck?.has(p)) {
+				p.joins = false
+				// Points are sorted: look up a line once for all its points.
+				if (p.to > p.from && p.from > lineEnd) lineEnd = doc.lineAt(p.from).to
+				if (p.to > p.from && p.to > lineEnd) p.joins = true
+			}
+			if (p.joins) {
 				let j = this.joins
 				if (j.length && j[j.length - 1] >= p.from) j[j.length - 1] = Math.max(j[j.length - 1], p.to)
 				else j.push(p.from, p.to)
 			}
 		}
 		for (let i = 0, k = 0; i < kept.length || k < fresh.length;) {
-			if (k == fresh.length || i < kept.length && order(kept[i], fresh[k]) <= 0) push(kept[i++])
-			else push(fresh[k++])
+			if (k == fresh.length || i < kept.length && order(kept[i], fresh[k]) <= 0) push(kept[i++], true)
+			else push(fresh[k++], false)
 		}
 		this.points = out
 		this.blockCount = blocks

@@ -1016,6 +1016,7 @@ export class CanvasView implements ScrollHost, InputHost {
 			let rainbow = this.rainbowState, pub = rainbow && this.syntax.canonicalTree(this.state.doc)
 			rainbow?.mapEdit(vu.changes, startState.doc, this.state.doc, pub?.tree ?? null, pub?.len ?? 0)
 		}
+		this.clampScrollTop()
 		// Pointer selections scroll at once (the pointer is there).
 		let smooth = !trs.some(tr => tr.isUserEvent("select.pointer"))
 		for (let target of scrollTargets) {
@@ -2290,6 +2291,20 @@ export class CanvasView implements ScrollHost, InputHost {
 			if (!m.total) break
 			this.keepAnchor(anchor.line, offset)
 		}
+	}
+
+	/// Like a DOM scroller, which the browser clamps as its content
+	/// shrinks: deleting lines at the end (or folding there) keeps the
+	/// view at the end, following the text. Without it the position
+	/// stayed past the end, the text drifted up over a blank band, and
+	/// the next scroll snapped it back (canvas-view#6). One comparison
+	/// per update (the row total is cached, and the frame needs it anyway).
+	private clampScrollTop() {
+		let before = this.top, max = this.maxScrollTop
+		if (before <= max) return
+		this.top = max
+		this.scroller.shift(max - before)
+		this.requestFrame()
 	}
 
 	private keepAnchor(line: number, offset: number) {

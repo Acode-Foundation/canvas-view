@@ -268,6 +268,44 @@ await page.evaluate(() => { window.atoms = [] })
 await page.keyboard.type("v")
 check("atomic: typing after the deletion goes to the cursor", await line3() == "let value = v;", JSON.stringify(await line3()))
 
+// Deleting lines at the end while scrolled to the end follows the text,
+// like a DOM scroller the browser clamps: the cursor stays at the
+// bottom, no blank band grows under it, and nothing jumps on the next
+// scroll (canvas-view#6).
+{
+	let docLen = await page.evaluate(() => {
+		let len = view.state.doc.length
+		view.reconfigure({scrollPastEnd: 0})
+		let tail = "\na".repeat(30)
+		view.dispatch({changes: {from: len, insert: tail}, selection: {anchor: len + tail.length}})
+		view.focus()
+		view.scrollTop = 1e9
+		return len
+	})
+	await frames()
+	let at = () => page.evaluate(() => {
+		let c = view.coordsAtPos(view.state.selection.main.head)
+		return {top: view.scrollTop, max: view.maxScrollTop, y: c.top - view.scrollDOM.getBoundingClientRect().top}
+	})
+	let start = await at(), steps = []
+	for (let i = 0; i < 20; i++) {
+		await page.keyboard.press("Backspace")
+		await frames()
+		steps.push(await at())
+	}
+	let last = steps[steps.length - 1]
+	check("deleting at the end keeps the view at the end", start.top == start.max && steps.every(s => s.top == s.max), JSON.stringify({start, last}))
+	check("deleting at the end keeps the cursor at the bottom", steps.every(s => Math.abs(s.y - start.y) < 1), JSON.stringify(steps.map(s => Math.round(s.y))))
+	await page.evaluate(() => { view.scrollTop = view.scrollTop + 1 })
+	await frames()
+	let after = await at()
+	check("no jump on the next scroll", Math.abs(after.y - last.y) < 1, JSON.stringify({last, after}))
+	await page.evaluate(len => {
+		view.dispatch({changes: {from: len, to: view.state.doc.length}})
+		view.reconfigure({scrollPastEnd: 1})
+	}, docLen)
+}
+
 // Typing latency: key event to GPU submit, at 4x CPU throttling.
 await freshLine()
 await page.evaluate(() => { view.stats.length = 0; view.recordStats = true })

@@ -56,12 +56,18 @@ const MIN_FLING = 50
 const MAX_FLING = 8000
 /// Android's default long-press timeout.
 export const LONG_PRESS_DELAY = 400
-/// Repeated flicks add up, like Android's list views (the scroller's
-/// flywheel) and Chrome's own touch scrolling (FlingBooster): a touch
-/// on a running fling doesn't stop it while the finger keeps moving
-/// its way, checked every FLYWHEEL_CHECK ms (AbsListView's
-/// FLYWHEEL_TIMEOUT), and flicking again adds the new velocity to the
-/// fling's. Without it every flick started from rest.
+/// Repeated flicks add up, like Android's scroller flywheel and Chrome's
+/// own touch scrolling (FlingBooster). A touch stops a fling at once
+/// (Android's ScrollView and RecyclerView abort it on ACTION_DOWN), but
+/// the fling is remembered: flicking on in its direction adds its
+/// velocity to the new one. The finger has to keep pushing that way,
+/// checked every FLYWHEEL_CHECK ms of its samples (AbsListView's
+/// FLYWHEEL_TIMEOUT): slower than MIN_FLING, against it, or held still
+/// (the velocity of samples over 100ms apart is 0) forgets the fling.
+/// Without it every flick started from rest. (The fling used to keep
+/// running for those 40ms, checked by a timer, but Blink holds timers
+/// back for ~100ms after a touchstart, so a tap stopped it ~100ms and
+/// ~400px late: Acode#3076.)
 const FLYWHEEL_CHECK = 40
 /// Both the fling and the new flick must be this fast (CSS px/s) to add
 /// up (Chrome's kMinBoostFlingSpeed).
@@ -85,13 +91,13 @@ export class ScrollController {
 	private vx = new VelocityTracker()
 	private vy = new VelocityTracker()
 	private flingStart = 0
-	/// Time of the last momentum step.
-	private stepTime = 0
 	private flingY: Axis | null = null
 	private flingX: Axis | null = null
-	/// The current touch landed on a fling that is still running.
-	private flywheel = false
-	private flywheelTimer: ReturnType<typeof setTimeout> | null = null
+	/// The fling the current touch stopped, kept while the finger pushes
+	/// its way, so that flicking on adds to it.
+	private flywheel: {y: Axis | null, x: Axis | null, start: number} | null = null
+	/// Time of the last flywheel check (or touch sample).
+	private flywheelAt = 0
 	/// Accumulated scroll position at the finger, unclamped, so a drag
 	/// past an edge has to come back before the content moves.
 	private fingerTop = 0
@@ -117,40 +123,21 @@ export class ScrollController {
 
 	stop() {
 		this.flingX = this.flingY = null
-		this.endFlywheel()
+		this.flywheel = null
 	}
 
-	private endFlywheel() {
-		this.flywheel = false
-		if (this.flywheelTimer != null) clearTimeout(this.flywheelTimer)
-		this.flywheelTimer = null
-	}
-
-	/// While a touch rides a fling: stop each axis the finger isn't
-	/// pushing along (a finger held still stops the fling within
-	/// FLYWHEEL_CHECK ms, as on Android).
-	private checkFlywheel = () => {
-		this.flywheelTimer = null
-		if (!this.flywheel) return
-		let now = performance.now()
+	/// Checked on the finger's samples and its release (no timer: see
+	/// FLYWHEEL_CHECK): forget each stopped fling axis the finger isn't
+	/// pushing along.
+	private checkFlywheel(time: number) {
+		let w = this.flywheel
+		if (!w || time - this.flywheelAt < FLYWHEEL_CHECK) return
 		let keep = (f: Axis | null, v: number) =>
 			f && Math.abs(v) >= MIN_FLING && Math.sign(v) == Math.sign(f.distance) ? f : null
-		this.flingY = keep(this.flingY, this.vy.velocity(now))
-		this.flingX = keep(this.flingX, this.vx.velocity(now))
-		this.syncFinger()
-		if (this.flinging) {
-			this.flywheelTimer = setTimeout(this.checkFlywheel, FLYWHEEL_CHECK)
-		} else {
-			this.endFlywheel()
-			if (!this.dragging) this.endScroll()
-		}
-	}
-
-	/// An axis stopped flinging under the finger: the drag carries on
-	/// from where it is.
-	private syncFinger() {
-		if (!this.flingY) this.fingerTop = this.host.scrollTop
-		if (!this.flingX) this.fingerLeft = this.host.scrollLeft
+		w.y = keep(w.y, this.vy.velocity(time))
+		w.x = keep(w.x, this.vx.velocity(time))
+		this.flywheelAt = time
+		if (!w.x && !w.y) this.flywheel = null
 	}
 
 	/// The position was set from outside (a scrollbar, `scrollTo`):
@@ -192,14 +179,14 @@ export class ScrollController {
 		this.startY = this.lastY = e.clientY
 		if (!this.host.foreignTarget?.(e.target)) this.host.surface.setPointerCapture(e.pointerId)
 		let wasFlinging = this.flinging
-		this.endFlywheel()
+		let stopped = {y: this.flingY, x: this.flingX, start: this.flingStart}
 		this.claimed = this.host.claimTouch(e.clientX, e.clientY, e)
-		if (this.claimed || !wasFlinging) {
-			this.stop()
-			if (wasFlinging) this.endScroll()
-		} else {
-			this.flywheel = true
-			this.flywheelTimer = setTimeout(this.checkFlywheel, FLYWHEEL_CHECK)
+		// The fling stops where it was last drawn.
+		this.stop()
+		if (wasFlinging) this.endScroll()
+		if (wasFlinging && !this.claimed) {
+			this.flywheel = stopped
+			this.flywheelAt = e.timeStamp
 		}
 		if (this.claimed) return
 		this.clearLongPress()
@@ -223,6 +210,7 @@ export class ScrollController {
 	private track(x: number, y: number, time: number) {
 		this.vx.add(time, -x)
 		this.vy.add(time, -y)
+		this.checkFlywheel(time)
 	}
 
 	private onMove = (e: PointerEvent) => {
@@ -263,23 +251,13 @@ export class ScrollController {
 		let dx = x - this.lastX, dy = y - this.lastY
 		this.lastX = x
 		this.lastY = y
-		// On a riding fling, the finger's motion moves the fling along
-		// (drawn by the next `step`).
 		if (!this.lockX) {
-			if (this.flingY) {
-				this.flingY.start -= dy
-			} else {
-				this.fingerTop -= dy
-				this.host.scrollTop = this.fingerTop
-			}
+			this.fingerTop -= dy
+			this.host.scrollTop = this.fingerTop
 		}
 		if (!this.lockY) {
-			if (this.flingX) {
-				this.flingX.start -= dx
-			} else {
-				this.fingerLeft -= dx
-				this.host.scrollLeft = this.fingerLeft
-			}
+			this.fingerLeft -= dx
+			this.host.scrollLeft = this.fingerLeft
 		}
 	}
 
@@ -293,11 +271,8 @@ export class ScrollController {
 			return
 		}
 		if (!this.dragging) {
-			// A tap on a fling stops it, even before the flywheel check.
-			if (this.flinging) {
-				this.stop()
-				this.endScroll()
-			}
+			// A tap that stopped a fling only stops it.
+			this.flywheel = null
 			if (!this.stoppedFling) this.host.onTap(e.clientX, e.clientY, e)
 			return
 		}
@@ -308,22 +283,20 @@ export class ScrollController {
 		let clamp = (v: number, max: number) => Math.max(-max, Math.min(max, v))
 		let vy = this.lockX ? 0 : clamp(this.vy.velocity(now) * speed, MAX_FLING * speed)
 		let vx = this.lockY ? 0 : clamp(this.vx.velocity(now) * speed, MAX_FLING * speed)
-		// Flicking along a fling the finger rode adds to its velocity.
-		let t = now - this.flingStart, host = this.host
-		let boost = (f: Axis | null, v: number) => {
-			if (!f || Math.abs(v) < MIN_BOOST) return v
-			let cur = axisVelocity(f, t)
-			if (Math.abs(cur) < MIN_BOOST || Math.sign(cur) != Math.sign(v)) return v
-			return clamp(v + cur, MAX_FLING * MAX_BOOST * speed)
-		}
-		if (this.flinging) {
-			// Start the new fling where the old one is now (the last frame
-			// may be older than the release, or newer).
-			let at = Math.max(t, this.stepTime - this.flingStart)
-			if (this.flingY) host.scrollTop = axisPos(this.flingY, at)
-			if (this.flingX) host.scrollLeft = axisPos(this.flingX, at)
-			vy = boost(this.flingY, vy)
-			vx = boost(this.flingX, vx)
+		// Flicking on in the direction of the fling the touch stopped adds
+		// that fling's velocity (where it would be now) to the new one.
+		this.checkFlywheel(now)
+		let w = this.flywheel
+		if (w) {
+			let t = now - w.start
+			let boost = (f: Axis | null, v: number) => {
+				if (!f || Math.abs(v) < MIN_BOOST || t >= f.duration) return v
+				let cur = axisVelocity(f, t)
+				if (Math.abs(cur) < MIN_BOOST || Math.sign(cur) != Math.sign(v)) return v
+				return clamp(v + cur, MAX_FLING * MAX_BOOST * speed)
+			}
+			vy = boost(w.y, vy)
+			vx = boost(w.x, vx)
 		}
 		this.stop()
 		this.fling(vx, vy, now)
@@ -363,7 +336,6 @@ export class ScrollController {
 	/// Advance momentum to the frame time. Returns true while animating.
 	step(now: number) {
 		if (!this.flinging) return false
-		this.stepTime = now
 		let t = now - this.flingStart
 		let host = this.host
 		if (this.flingY) {
@@ -380,11 +352,7 @@ export class ScrollController {
 			host.scrollLeft = left
 			if (t >= f.duration || (f.distance < 0 ? left <= 0 : left >= host.maxScrollLeft)) this.flingX = null
 		}
-		if (!this.flinging) {
-			// A drag riding the fling goes on without it.
-			if (this.dragging) this.syncFinger()
-			else this.endScroll()
-		}
+		if (!this.flinging) this.endScroll()
 		return this.flinging
 	}
 
@@ -412,7 +380,7 @@ export class ScrollController {
 
 	destroy() {
 		this.clearLongPress()
-		this.endFlywheel()
+		this.flywheel = null
 		if (this.wheelTimer != null) clearTimeout(this.wheelTimer)
 		let dom = this.host.surface
 		dom.removeEventListener("pointerdown", this.onDown)

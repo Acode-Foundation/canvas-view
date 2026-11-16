@@ -214,6 +214,23 @@ async function open(kind, lines) {
 	check("tap stops the fling", Math.abs(stillAt - stoppedAt) < 1, `${stoppedAt} → ${stillAt}`)
 	check("tap that stops a fling keeps the cursor", afterTap.head == before.head, `${before.head} → ${afterTap.head}`)
 
+	// The touch itself stops it, like Android's ScrollView: no frame
+	// moves after the finger lands (it used to run on until a 40ms
+	// timer, which Blink delays to ~100ms after a touchstart: Acode#3076).
+	await t.swipe(200, 700, 200, 6)
+	await t.frames()
+	let downAt = await t.page.evaluate(() => ({top: view.scrollTop, scrolling: view.scrolling}))
+	await t.cdp.send("Input.dispatchTouchEvent", {type: "touchStart", touchPoints: [{x: 200, y: 400, id: 1}]})
+	let landed = await t.page.evaluate(() => new Promise(r => requestAnimationFrame(() => r(view.scrollTop))))
+	await sleep(80)
+	await t.frames()
+	let held = await t.page.evaluate(() => ({top: view.scrollTop, scrolling: view.scrolling}))
+	await t.cdp.send("Input.dispatchTouchEvent", {type: "touchEnd", touchPoints: []})
+	await t.frames()
+	check("touch-down stops a fling at once", downAt.scrolling && !held.scrolling && Math.abs(held.top - landed) < 1,
+		JSON.stringify({downAt, landed, held}))
+	check("touch-down on a fling keeps the cursor", (await t.head()).head == before.head)
+
 	// Flicking again along a fling adds to it (Android's flywheel); a
 	// flick against it, or a finger held still on it, doesn't.
 	let flingDistance = () => t.page.evaluate(() => view.scroller.flingY?.distance ?? 0)

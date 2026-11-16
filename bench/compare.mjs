@@ -136,7 +136,9 @@ async function run(impl, cpu) {
 	let page = device ? devicePage : await phonePage(browser)
 	let cdp = device ? deviceCdp : await page.createCDPSession()
 	await cdp.send("Emulation.setCPUThrottlingRate", {rate: 1})
-	if (device) await page.goto("about:blank")
+	// No about:blank in between on a device: Acode's WebView hands it to
+	// Android as an external link, which opens another app and detaches
+	// the page.
 	await cdp.send("Emulation.setCPUThrottlingRate", {rate: cpu})
 	await page.evaluateOnNewDocument(colorProbe)
 	await page.goto(`${server.url}/${pages[impl]}`, {timeout: 180000})

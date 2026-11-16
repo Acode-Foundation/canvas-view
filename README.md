@@ -26,17 +26,18 @@ it updates incrementally. A scroll frame only changes a few offsets, so
 the picture always matches the scroll position, and CodeMirror's UI
 still runs as real DOM over and around the canvas.
 
-On a phone (Motorola Edge 40 Neo, Android System WebView, 90Hz) with a
-120,000-line JavaScript file, CPU slowed 6× to approximate a low-end
-device:
+On a phone (Motorola Edge 40 Neo, Android 15, System WebView 156,
+90Hz) with a 120,000-line JavaScript file, CPU slowed 6× to approximate
+a low-end device (2026-11-16):
 
 | | canvas-view | CodeMirror 6 | Ace | Monaco |
 | --- | --- | --- | --- | --- |
-| Fling frame p95 / worst | 11.2 / 11.3ms | 11.2 / 110.9ms | 55.4 / 66.7ms | 33.3 / 55.5ms |
+| Fling frame p95 / worst | 11.2 / 11.2ms | 11.2 / 122.1ms | 55.5 / 77.6ms | 44.4 / 99.8ms |
 | Frames with blank areas | 0 | 5 | 0 | 0 |
-| Main-thread time per scroll frame | 6.3ms | 10.6ms | 37.4ms | 64.1ms |
-| Typing latency p50 / p95 | 36 / 68ms | 62 / 80ms | 53 / 63ms | 51 / 64ms |
-| JS heap | 11 MB | 10 MB | 26 MB | 40 MB |
+| Long tasks during flings and typing | 0 | 14 | 4 | 25 |
+| Main-thread time per scroll frame | 6.4ms | 7.8ms | 41.6ms | 67.7ms |
+| Typing latency p50 / p95 | 36 / 45ms | 63 / 80ms | 57 / 73ms | 55 / 72ms |
+| JS heap | 11 MB | 11 MB | 25 MB | 41 MB |
 
 11.1ms is a perfect frame at 90Hz. Reproduce with
 `node bench/compare.mjs --device` (see [Development](#development)).

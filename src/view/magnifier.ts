@@ -42,8 +42,13 @@ export class Magnifier {
 
 	/// Show the magnifier centered on point `x, y` (CSS px in the view),
 	/// copying from `source`, the canvas just drawn. `view` is the view's
-	/// size and line height.
-	show(source: HTMLCanvasElement, x: number, y: number, view: {width: number, height: number, lineHeight: number, fontSize: number}) {
+	/// size and line height. `background` is an opaque CSS color painted
+	/// under the copy: a see-through canvas (a picture behind the
+	/// editor) has translucent pixels, which an opaque 2D canvas would
+	/// otherwise blend onto black and then onto its own previous frame,
+	/// smearing the moving text.
+	show(source: HTMLCanvasElement, x: number, y: number, view: {width: number, height: number, lineHeight: number, fontSize: number},
+		background: string | null = null) {
 		if (view.fontSize > MAX_FONT_SIZE || !view.width || !source.width) {
 			this.hide()
 			return
@@ -67,6 +72,10 @@ export class Magnifier {
 		let scale = source.width / view.width
 		let sw = w / zoom, sh = h / zoom
 		let sx = Math.max(0, Math.min(view.width - sw, x - sw / 2)), sy = Math.max(0, Math.min(view.height - sh, y - sh / 2))
+		if (background) {
+			cx.fillStyle = background
+			cx.fillRect(0, 0, this.dom.width, this.dom.height)
+		}
 		cx.imageSmoothingEnabled = true
 		cx.drawImage(source, sx * scale, sy * scale, sw * scale, sh * scale, 0, 0, this.dom.width, this.dom.height)
 		// A row above the point, clear of the finger (sora-editor's).

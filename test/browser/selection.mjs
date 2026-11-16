@@ -248,6 +248,65 @@ check("handle drags never collapse the selection", s.from < s.to, JSON.stringify
 	await frames()
 	await page.evaluate(() => { delete view.touchSelection.config.magnifier })
 	check("magnifier: false turns it off", !off.shown)
+
+	// With a see-through background, the magnifier shows the text over
+	// the editor's opaque background: never blended onto black, or onto
+	// its own previous frame (which left trails behind moving text).
+	await page.evaluate(() => view.setTheme({...view.theme.spec, background: "rgba(40, 80, 120, 0.5)"}))
+	await frames()
+	// Read from the screen: a 2D canvas fed from a WebGPU canvas reads
+	// back stale pixels in headless Chromium, though it shows the right ones.
+	let magShot = async () => {
+		let r = await page.evaluate(() => {
+			let m = document.querySelector(".cm-canvasMagnifier")
+			if (!m || m.style.display == "none") return null
+			let b = m.getBoundingClientRect()
+			return {x: b.left + 8, y: b.top + 8, width: b.width - 16, height: b.height - 16}
+		})
+		if (!r) return null
+		let png = await page.screenshot({clip: r, encoding: "base64"})
+		return page.evaluate(async png => {
+			let img = new Image()
+			img.src = "data:image/png;base64," + png
+			await img.decode()
+			let c = document.createElement("canvas")
+			c.width = img.width
+			c.height = img.height
+			let cx = c.getContext("2d")
+			cx.drawImage(img, 0, 0)
+			let d = cx.getImageData(0, 0, c.width, c.height).data, counts = new Map()
+			for (let i = 0; i < d.length; i += 4) {
+				let k = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2]
+				counts.set(k, (counts.get(k) ?? 0) + 1)
+			}
+			let best = 0, n = 0
+			for (let [k, c] of counts) if (c > n) { best = k; n = c }
+			return {bg: [best >> 16, (best >> 8) & 255, best & 255]}
+		}, png)
+	}
+	e = await handleRect("end")
+	await touch("touchStart", e.x, e.y)
+	await sleep(16)
+	await touch("touchMove", e.x - 3, e.y)
+	await sleep(16)
+	await touch("touchMove", e.x - 25, e.y)
+	await frames()
+	let first = await magShot()
+	for (let dx = 30; dx <= 60; dx += 10) {
+		await sleep(16)
+		await touch("touchMove", e.x - dx, e.y)
+		await frames()
+	}
+	let later = await magShot()
+	await touch("touchEnd")
+	await frames()
+	await page.evaluate(() => view.setTheme(null))
+	await frames()
+	// The canvas is the theme's background over the editor's CSS one,
+	// here the same color made opaque. Without the fill, it was blended
+	// onto black and then onto the previous frame, drifting each frame.
+	let nearBg = m => m && Math.abs(m.bg[0] - 40) + Math.abs(m.bg[1] - 80) + Math.abs(m.bg[2] - 120) <= 12
+	check("see-through background: magnifier keeps the editor's background", nearBg(first) && nearBg(later), JSON.stringify({first, later}))
 }
 
 // A keyboard selection keeps CodeMirror's cursor at its head.

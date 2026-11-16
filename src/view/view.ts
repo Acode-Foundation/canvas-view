@@ -1345,7 +1345,8 @@ export class CanvasView implements ScrollHost, InputHost {
 		}
 		let config = this.config.touchSelection?.magnifier
 		this.magnifier ??= new Magnifier(this.scrollDOM, typeof config == "object" ? config : {})
-		this.magnifier.show(this.canvas, at.x, at.y, {width: this.width, height: this.height, lineHeight: this.lineHeight, fontSize: this.font.size})
+		this.magnifier.show(this.canvas, at.x, at.y, {width: this.width, height: this.height, lineHeight: this.lineHeight, fontSize: this.font.size},
+			this.theme.opaque ? null : cssColor(this.solidBackground))
 	}
 
 	private placeBlocks() {

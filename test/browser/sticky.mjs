@@ -248,7 +248,7 @@ async function open(query) {
 	ys = await page.evaluate(() => {
 		let out = [], lh = view.lineHeight, b = view.stickyParts[1].glyphs, ink = 0
 		for (let i = 0; i < b.count; i++) out.push(b.f32[i * 5 + 1])
-		for (let n = 1; n <= 4; n++) ink += view.state.doc.line(n).text.replace(/\s/g, "").length
+		for (let n = 1; n <= 4; n++) ink += view.state.doc.line(n).text.replace(/\s+/g, "").length
 		return {max: Math.max(...out), lh, rows: view.lines.vline(2).rows, glyphs: b.count, ink}
 	})
 	check("a wrapped header draws its first row only", ys.rows > 1 && ys.max < 4 * ys.lh && ys.glyphs < ys.ink - 40, JSON.stringify(ys))

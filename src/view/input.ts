@@ -213,7 +213,8 @@ export function inputHandlers(host: InputHost, view: unknown, isComposing: () =>
 		if (host.state.readOnly || !text) return
 		// Filters see the clipboard's text as it is, and may empty it
 		// (then the selection is deleted), as in CodeMirror.
-		text = clipboardFilter(host.state, "input", text).replace(/\r\n?/g, "\n")
+		text = clipboardFilter(host.state, "input", text)
+		text = text.includes("\r") ? text.replace(/\r\n?/g, "\n") : text
 		host.dispatch({...host.state.replaceSelection(host.state.toText(text)), userEvent: "input.paste", scrollIntoView: true})
 	}
 	return {onKeyDown, onCopy, onPaste}

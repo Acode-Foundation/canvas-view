@@ -479,7 +479,6 @@ export class TouchSelection {
 			// the output filter (drag start) and the input one (drop).
 			let text = clipboardFilter(state, "input", clipboardFilter(state, "output", state.sliceDoc(from, to)))
 			let text = text.includes("\r") ? text.replace(/\r\n?/g, "\n") : text
-
 			if (!text) return
 			let changes = state.changes([{from, to}, {from: pos, insert: text}])
 			this.host.dispatch({

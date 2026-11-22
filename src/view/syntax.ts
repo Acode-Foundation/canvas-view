@@ -33,6 +33,10 @@ const MIXED_STAGE_AHEAD = 3000
 /// worker takes slices of up to 100ms.
 const VISIBLE_BUDGET = 40
 const URGENT_BUDGET = 40
+/// Parse loops read the clock every this many steps (a power of two):
+/// a step is a few tokens, and reading the clock after each took a fifth
+/// of the parse time on a slow phone.
+const CLOCK_EVERY = 8
 /// Highlighting this far before a partial tree's end may still change
 /// when the parse continues.
 const STABLE_MARGIN = 2000
@@ -450,7 +454,7 @@ export class SyntaxDriver {
 		if (!this.parse) {
 			this.parse = parser.startParse(new DocInput(this.doc), this.fragments)
 		}
-		for (;;) {
+		for (let steps = 1;; steps++) {
 			let done = this.parse.advance()
 			if (done) {
 				this.publish(done, this.doc.length)
@@ -464,7 +468,7 @@ export class SyntaxDriver {
 				this.takeTree()
 				return true
 			}
-			if (performance.now() > end) {
+			if (steps % CLOCK_EVERY == 0 && performance.now() > end) {
 				// Publish a partial tree when it newly covers visible text,
 				// or after a lot of background progress.
 				let gain = pos - this.treeLen
@@ -498,7 +502,7 @@ export class SyntaxDriver {
 		let parse = this.parse
 		// A parse of an older document keeps its own stop position.
 		if (!this.parsePending && stage < this.doc.length && (parse.stoppedAt == null || parse.stoppedAt > stage)) parse.stopAt(stage)
-		for (;;) {
+		for (let steps = 1;; steps++) {
 			let done = parse.advance()
 			if (done && this.parsePending) {
 				let pending = this.parsePending, ranges: {fromA: number, toA: number, fromB: number, toB: number}[] = []
@@ -518,7 +522,7 @@ export class SyntaxDriver {
 				this.fragments = TreeFragment.addTree(done, this.fragments, len < this.doc.length)
 				return true
 			}
-			if (performance.now() > end) return false
+			if (steps % CLOCK_EVERY == 0 && performance.now() > end) return false
 		}
 	}
 
@@ -608,7 +612,7 @@ export class SyntaxDriver {
 
 	/// Advance a window's parse until `end`. Returns true when it's done.
 	private workWindow(w: Window, end: number) {
-		while (w.parse) {
+		for (let steps = 1; w.parse; steps++) {
 			let done = w.parse.advance()
 			if (done && w.pending) {
 				// Parsed a document edited since: parse the window again
@@ -622,7 +626,7 @@ export class SyntaxDriver {
 				this.noteChanged(w.from, w.to)
 				return true
 			}
-			if (performance.now() > end) return false
+			if (steps % CLOCK_EVERY == 0 && performance.now() > end) return false
 		}
 		return !!w.tree
 	}

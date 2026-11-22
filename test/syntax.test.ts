@@ -250,8 +250,9 @@ test("window parses mapped through edits match fresh ones", async () => {
 // Typing faster than a parse can finish: every slice of parsing is
 // followed by an edit near the visible text. A parse that restarts on
 // each edit never finishes, and the screen stays without colors for as
-// long as the user types. `steps` advance calls fit in a slice (a clock
-// that moves on every call), so this doesn't depend on the machine.
+// long as the user types. The clock moves on every read (the driver
+// reads it every 8 parse steps), so `steps` reads, 8 * `steps` parse
+// steps, fit in a slice whatever the machine.
 async function typeWhileParsing(state: EditorState, line: number, rounds: number, steps: number) {
 	let queue: (() => void)[] = []
 	let driver = new SyntaxDriver(state, classHighlighter, () => {}, cb => queue.push(cb))
@@ -295,7 +296,7 @@ function namedRuns(d: SyntaxDriver, line: number) {
 test("a window parse interrupted by every keystroke still finishes", async () => {
 	let {makeFixture} = await import("../demo/fixtures")
 	let state = EditorState.create({doc: makeFixture("js", 120000), extensions: javascript()})
-	let {driver, state: end, colored} = await typeWhileParsing(state, 110000, 300, 1000)
+	let {driver, state: end, colored} = await typeWhileParsing(state, 110000, 300, 125)
 	expect(colored).toBeGreaterThanOrEqual(0)
 	expect((driver as any).lines.get(110005)?.source).toBeLessThan(-1)
 	let ref = freshRuns(end, 109990, 110020)
@@ -309,7 +310,7 @@ test("a mixed-language parse interrupted by every keystroke still reaches the sc
 		: `<p class="c${i}" style="margin-bottom: 0; font-style: normal"><span style="font-family: Segoe UI, sans-serif">If you mean scruffy-looking, then yes. ${i}</span></p>`)
 	lines.push("</body></html>")
 	let state = EditorState.create({doc: lines.join("\n"), extensions: html()})
-	let {driver, state: end, colored} = await typeWhileParsing(state, 654, 400, 2000)
+	let {driver, state: end, colored} = await typeWhileParsing(state, 654, 400, 250)
 	expect(colored).toBeGreaterThanOrEqual(0)
 	expect(driver.progress.treeLen).toBeGreaterThan(end.doc.line(674).to)
 	let ref = freshRuns(end, 600, 700)

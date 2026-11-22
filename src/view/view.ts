@@ -1345,7 +1345,7 @@ export class CanvasView implements ScrollHost, InputHost {
 			return
 		}
 		let config = this.config.touchSelection?.magnifier
-		this.magnifier ??= new Magnifier(this.scrollDOM, typeof config == "object" ? config : {})
+		this.magnifier ??= new Magnifier(this.scrollDOM, typeof config == "object" ? config : {}, this.touchSelection.style)
 		this.magnifier.show(this.canvas, at.x, at.y, {width: this.width, height: this.height, lineHeight: this.lineHeight, fontSize: this.font.size},
 			this.theme.opaque ? null : cssColor(this.solidBackground))
 	}
@@ -3416,13 +3416,34 @@ export class CanvasView implements ScrollHost, InputHost {
 		return found
 	}
 
-	/// Teardrop selection handles, drawn as tinted atlas shapes.
+	/// Selection handles, drawn as tinted atlas shapes: Android's
+	/// teardrops, or iOS's bars with a knob.
 	private buildHandles(rowY: (row: number) => number) {
 		let buf = this.handleGlyphs, ts = this.touchSelection
 		buf.reset()
 		let dpr = this.dpr, s = Math.round(ts.handleSize * dpr), r = s / 2
 		if (!s) return
 		let color = this.theme.selectionHandle
+		if (ts.style == "ios") {
+			// UIKit's grabbers: a caret-wide bar as tall as the row, with a
+			// round knob above the start and below the end. A caret gets
+			// none: it is dragged itself.
+			let k = Math.max(2, Math.round(s / 2)), bar = Math.max(1, Math.round(2 * dpr))
+			let lh = Math.ceil(this.lineHeight * dpr), w = k, h = lh + k, bx = Math.floor((w - bar) / 2)
+			for (let {kind, pos, side} of ts.handles()) {
+				if (kind == "cursor") continue
+				let c = this.posCoords(pos, side), x = c.x * this.cellWidth, top = rowY(c.row)
+				let start = kind == "start"
+				let g = this.atlas.shape(`handle-ios-${kind}-${k}-${lh}-${bar}`, w, h, cx => {
+					cx.fillRect(bx, start ? k / 2 : 0, bar, lh + k / 2)
+					cx.beginPath()
+					cx.arc(w / 2, start ? k / 2 : lh + k / 2, k / 2, 0, 2 * Math.PI)
+					cx.fill()
+				})
+				pushGlyph(buf, x - (bx + bar / 2) / dpr, start ? top - k / dpr : top, g, color)
+			}
+			return
+		}
 		for (let {kind, pos, side} of ts.handles()) {
 			let c = this.posCoords(pos, side)
 			let x = c.x * this.cellWidth, y = rowY(c.row) + this.lineHeight

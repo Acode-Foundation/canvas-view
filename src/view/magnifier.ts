@@ -1,11 +1,13 @@
 /// Options for the touch selection magnifier.
 export interface MagnifierConfig {
-	/// Magnification. Default 1.25 (Android's and sora-editor's).
+	/// Magnification. Default 1.25 (Android's and sora-editor's), 1.4
+	/// with the "ios" style.
 	zoom?: number
 	/// Size in CSS px. Defaults to sora-editor's actual size: 70 tall,
 	/// and 250 device pixels per whole device pixel ratio wide (its
 	/// formula truncates the density: ~190 at DPR 2.625, 250 at 2 or
-	/// 3), at most 3/5 of the view.
+	/// 3), at most 3/5 of the view. With the "ios" style, a capsule
+	/// like UIKit's: 120 by 44.
 	width?: number
 	height?: number
 }
@@ -28,14 +30,18 @@ export class Magnifier {
 	private left = NaN
 	private top = NaN
 
-	constructor(parent: HTMLElement, private config: MagnifierConfig = {}) {
+	constructor(parent: HTMLElement, private config: MagnifierConfig = {}, private style: "android" | "ios" = "android") {
 		let dom = this.dom = document.createElement("canvas")
 		dom.className = "cm-canvasMagnifier"
 		dom.setAttribute("aria-hidden", "true")
 		Object.assign(dom.style, {
 			position: "absolute", left: "0", top: "0", display: "none", pointerEvents: "none", zIndex: "5",
-			// sora-editor's: 8dp corners, 4dp elevation.
-			borderRadius: "8px", boxShadow: "0 2px 6px rgba(0,0,0,0.4)", willChange: "transform"
+			willChange: "transform",
+			...style == "ios"
+				// UIKit's loupe: a capsule with a hairline edge and a soft shadow.
+				? {borderRadius: "999px", boxShadow: "0 0 0 0.5px rgba(0,0,0,0.12), 0 4px 14px rgba(0,0,0,0.22)"}
+				// sora-editor's: 8dp corners, 4dp elevation.
+				: {borderRadius: "8px", boxShadow: "0 2px 6px rgba(0,0,0,0.4)"}
 		} satisfies Partial<CSSStyleDeclaration>)
 		parent.appendChild(dom)
 	}
@@ -53,10 +59,11 @@ export class Magnifier {
 			this.hide()
 			return
 		}
-		let zoom = this.config.zoom ?? 1.25, lh = view.lineHeight
+		let ios = this.style == "ios"
+		let zoom = this.config.zoom ?? (ios ? 1.4 : 1.25), lh = view.lineHeight
 		let dpr = window.devicePixelRatio || 1, size = this.size
-		let w = Math.round(Math.min(this.config.width ?? Math.min(Math.max(1, Math.floor(dpr)) * 250 / dpr, view.width * 0.6), view.width))
-		let h = Math.round(this.config.height ?? 70)
+		let w = Math.round(Math.min(this.config.width ?? Math.min(ios ? 120 : Math.max(1, Math.floor(dpr)) * 250 / dpr, view.width * 0.6), view.width))
+		let h = Math.round(this.config.height ?? (ios ? 44 : 70))
 		if (w != size.w || h != size.h || dpr != size.dpr) {
 			size.w = w; size.h = h; size.dpr = dpr
 			this.dom.width = Math.round(w * dpr)

@@ -120,6 +120,7 @@ export const sections: Section[] = [
 		{key: "ext", label: "CodeMirror plugins", def: "full", choices: [["full", "Search, autocomplete, lint, hover, inlay hints"], ["basic", "None (state only)"]]},
 		{key: "input", label: "Text input", def: "auto", choices: [["auto", "Auto"], ["editcontext", "EditContext"], ["textarea", "Textarea"]]},
 		{key: "handles", label: "Selection handles", def: "20", choices: [["0", "Off"], ["16", "Small"], ["20", "Normal"], ["26", "Large"]]},
+		{key: "handleStyle", label: "Handle and magnifier style", def: "auto", choices: [["auto", "Platform"], ["android", "Android"], ["ios", "iOS"]]},
 		{key: "magnifier", label: "Magnifier", def: "1", choices: onOff}
 	]},
 	{title: "Rendering", settings: [

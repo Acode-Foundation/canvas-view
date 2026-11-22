@@ -726,6 +726,55 @@ check("mouse double click selects an emoji run", s.text == "😀🎉", JSON.stri
 	check("old WebView: no errors", errors.length == 0, errors.join("; "))
 }
 
+// The iOS style (UIKit's): bars with knobs, no handle under a caret,
+// which is dragged itself, and a capsule loupe.
+{
+	await page.goto(`${server.url}/index.html?kind=js&lines=2000&backend=${backend}&bare=1&handleStyle=ios`)
+	await page.waitForFunction("window.ready === true")
+	await sleep(300)
+	check("ios: style option", await page.evaluate(() => view.touchSelection.style) == "ios")
+	let p = await posOf(12, "cached"), pt = await at(p + 2)
+	await tap(pt.x, pt.y)
+	await tap(pt.x, pt.y)
+	await frames()
+	let s = await sel()
+	check("ios: double tap selects the word", s.text == "cached" && s.mode == "selection", JSON.stringify(s))
+	let st = await handleRect("start"), en = await handleRect("end"), lh = await page.evaluate(() => view.lineHeight)
+	check("ios: grabbers are caret-tall bars with a knob above the start and below the end",
+		st.h > lh && en.h > lh && st.w < lh && st.top < en.top, JSON.stringify({st, en, lh}))
+	check("ios: grabbers are drawn", await handlePixels("start") > 0.1 && await handlePixels("end") > 0.1)
+	// Dragging the end bar extends the selection, with a capsule loupe.
+	let target = await at(await posOf(12, "cache.get", true))
+	await touch("touchStart", en.x, en.y)
+	await sleep(16)
+	await touch("touchMove", en.x + 3, en.y)
+	await sleep(16)
+	await touch("touchMove", target.x, en.y)
+	await frames()
+	let loupe = await page.evaluate(() => {
+		let m = document.querySelector(".cm-canvasMagnifier")
+		return m && m.style.display != "none" ? {radius: m.style.borderRadius, w: m.offsetWidth, h: m.offsetHeight} : null
+	})
+	await touch("touchEnd")
+	await frames()
+	check("ios: capsule loupe while dragging", loupe && loupe.radius == "999px" && loupe.h == 44 && loupe.w == 120, JSON.stringify(loupe))
+	s = await sel()
+	check("ios: dragging the end grabber extends the selection", s.text.startsWith("cached = cache"), JSON.stringify(s))
+	// A tap places a caret with no handle drawn, and it stays draggable.
+	pt = await at(await posOf(14, "result"))
+	await tap(pt.x, pt.y)
+	await sleep(450)
+	await frames()
+	s = await sel()
+	check("ios: tap places a caret without a handle", s.mode == "cursor" && await page.evaluate(() => view.handleGlyphs.count) == 0, JSON.stringify(s))
+	let c = await handleRect("cursor")
+	let dest = await at(await posOf(15, "result"))
+	await drag([c, {x: c.x + 2, y: c.y + 6}, {x: dest.x - 3, y: dest.y}, {x: dest.x - 3, y: dest.y}])
+	s = await sel()
+	let want = await posOf(15, "result")
+	check("ios: dragging the caret moves it", Math.abs(s.head - want) <= 1, `${s.head} vs ${want}`)
+}
+
 await browser.close()
 server.close()
 console.log(`\n${passes} passed, ${failures} failed (${backend})`)

@@ -24,10 +24,20 @@ export type SelectionMenuEvent = {
 }
 
 export interface TouchSelectionConfig {
-	/// Selection handle size in CSS px (the teardrop's square side);
-	/// 0 disables handles. Default 20.
+	/// How handles and the magnifier look, following the platform's
+	/// native text fields. "android": teardrop handles (a teardrop
+	/// under a tapped caret too) and a rounded rectangle loupe. "ios":
+	/// caret-tall bars with a round knob above the start and below the
+	/// end, no handle under the caret (the caret itself is dragged, as
+	/// in UIKit) and a capsule loupe. Defaults to "ios" on iPhone and
+	/// iPad, "android" elsewhere.
+	style?: "android" | "ios"
+	/// Selection handle size in CSS px (the teardrop's square side;
+	/// with the "ios" style, twice the knob's diameter); 0 disables
+	/// handles. Default 20.
 	handleSize?: number
-	/// How long the cursor handle stays after a tap, in ms. Default 3000.
+	/// How long the cursor handle stays after a tap, in ms. Default
+	/// 3000. Not with the "ios" style: the caret stays draggable.
 	cursorHandleTimeout?: number
 	/// Show/hide requests for the consumer's selection menu (copy, cut,
 	/// paste...). The library draws no menu itself.
@@ -86,6 +96,7 @@ export class TouchSelection {
 	/// Bumped when what's drawn changes (handles), for redraw keys.
 	version = 0
 	readonly handleSize: number
+	readonly style: "android" | "ios"
 	private menuWanted = false
 	private menuShown = false
 	private menuTrigger: "cursor" | "selection" = "selection"
@@ -104,6 +115,7 @@ export class TouchSelection {
 
 	constructor(private host: TouchSelectionHost, private config: TouchSelectionConfig = {}) {
 		this.handleSize = config.handleSize ?? 20
+		this.style = config.style ?? (ios ? "ios" : "android")
 	}
 
 	get dragging() { return !!this.drag }
@@ -116,7 +128,7 @@ export class TouchSelection {
 		}
 		if (this.cursorTimer != null) clearTimeout(this.cursorTimer)
 		this.cursorTimer = null
-		if (mode == "cursor") {
+		if (mode == "cursor" && this.style == "android") {
 			this.cursorTimer = setTimeout(() => {
 				this.cursorTimer = null
 				if (this.mode == "cursor" && !this.drag) {
@@ -199,6 +211,12 @@ export class TouchSelection {
 		let sel = this.host.state.selection.main, s = this.handleSize
 		let pos = kind == "start" ? sel.from : kind == "end" ? sel.to : sel.head
 		let {x, y} = this.host.handleAnchor(pos, kind == "start" ? 1 : kind == "end" ? -1 : sel.assoc)
+		if (this.style == "ios") {
+			// The caret itself, or a bar with its knob (see `buildHandles`).
+			let lh = this.host.lineHeight, k = s / 2
+			if (kind == "cursor") return new DOMRect(x - 1, y - lh, 2, lh)
+			return new DOMRect(x - k / 2, kind == "start" ? y - lh - k : y - lh, k, lh + k)
+		}
 		if (kind == "cursor") {
 			let d = s * Math.SQRT2
 			return new DOMRect(x - d / 2, y, d, d)
@@ -288,6 +306,9 @@ export class TouchSelection {
 	claimTouch(x: number, y: number): boolean {
 		let kind = this.hitHandle(x, y)
 		if (!kind) return false
+		// An iOS caret is grabbed where it's drawn, so the second tap of
+		// a double tap lands on it: that one still selects the word.
+		if (kind == "cursor" && this.style == "ios" && performance.now() - this.lastTap.time < TAP_INTERVAL) return false
 		let sel = this.host.state.selection.main
 		let pos = kind == "start" ? sel.from : kind == "end" ? sel.to : sel.head
 		let a = this.host.handleAnchor(pos, kind == "start" ? 1 : kind == "end" ? -1 : sel.assoc)
@@ -532,6 +553,9 @@ export class TouchSelection {
 }
 
 export const mac = typeof navigator != "undefined" && /Mac/.test(navigator.platform)
+/// iPhone and iPad (iPadOS reports a Mac with touch points).
+export const ios = typeof navigator != "undefined" &&
+	(/iPhone|iPad|iPod/.test(navigator.userAgent) || mac && navigator.maxTouchPoints > 1)
 
 /// `EditorView.clickAddsSelectionRange`, with CodeMirror's default
 /// (Cmd on macOS, Ctrl elsewhere). Taps use it too, so a consumer can

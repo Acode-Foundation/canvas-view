@@ -246,3 +246,72 @@ test("window parses mapped through edits match fresh ones", async () => {
 	}
 	expect(compared.window).toBeGreaterThan(500)
 }, 60000)
+
+// Typing faster than a parse can finish: every slice of parsing is
+// followed by an edit near the visible text. A parse that restarts on
+// each edit never finishes, and the screen stays without colors for as
+// long as the user types. `steps` advance calls fit in a slice (a clock
+// that moves on every call), so this doesn't depend on the machine.
+async function typeWhileParsing(state: EditorState, line: number, rounds: number, steps: number) {
+	let queue: (() => void)[] = []
+	let driver = new SyntaxDriver(state, classHighlighter, () => {}, cb => queue.push(cb))
+	let visible = (s: EditorState) => [s.doc.line(line - 20).from, s.doc.line(line + 20).to] as const
+	let now = performance.now, t = 0
+	performance.now = () => (t += 40 / steps)
+	let colored = -1
+	try {
+		driver.setVisible(...visible(state))
+		for (let i = 0; i < rounds && colored < 0; i++) {
+			let pos = state.doc.line(line).to
+			let tr = state.update({changes: {from: pos, insert: i % 2 ? "x" : " "}})
+			state = tr.state
+			driver.update(state, tr.changes)
+			queue.shift()?.()
+			let runs: readonly number[] | null = null
+			driver.runsFor(line + 5, line + 5, (_n, r, exact) => { if (exact || (driver as any).lines.get(line + 5)?.source < -1) runs = r })
+			if (runs) colored = i
+		}
+	} finally {
+		performance.now = now
+	}
+	return {driver, state, colored}
+}
+
+function freshRuns(state: EditorState, from: number, to: number) {
+	let queue: (() => void)[] = []
+	let d = new SyntaxDriver(state, classHighlighter, () => {}, cb => queue.push(cb))
+	d.budget = () => 1e9
+	d.setVisible(state.doc.line(from).from, state.doc.line(to).to)
+	for (let i = 0; i < 100 && queue.length; i++) queue.shift()!()
+	return d
+}
+
+function namedRuns(d: SyntaxDriver, line: number) {
+	let out = ""
+	d.runsFor(line, line, (_n, runs) => out = JSON.stringify(runs?.map((v, k) => k % 3 == 2 ? d.classes[v] : v)))
+	return out
+}
+
+test("a window parse interrupted by every keystroke still finishes", async () => {
+	let {makeFixture} = await import("../demo/fixtures")
+	let state = EditorState.create({doc: makeFixture("js", 120000), extensions: javascript()})
+	let {driver, state: end, colored} = await typeWhileParsing(state, 110000, 300, 1000)
+	expect(colored).toBeGreaterThanOrEqual(0)
+	expect((driver as any).lines.get(110005)?.source).toBeLessThan(-1)
+	let ref = freshRuns(end, 109990, 110020)
+	for (let n = 109995; n <= 110015; n++) expect(namedRuns(driver, n)).toBe(namedRuns(ref, n))
+}, 60000)
+
+test("a mixed-language parse interrupted by every keystroke still reaches the screen", async () => {
+	let lines = ["<!doctype html>", "<html><body>"]
+	for (let i = 0; i < 2000; i++) lines.push(i % 3 == 1
+		? `<p class="c${i}" style="margin-bottom: 0; font-style: normal; font-weight: normal">&nbsp;</p>`
+		: `<p class="c${i}" style="margin-bottom: 0; font-style: normal"><span style="font-family: Segoe UI, sans-serif">If you mean scruffy-looking, then yes. ${i}</span></p>`)
+	lines.push("</body></html>")
+	let state = EditorState.create({doc: lines.join("\n"), extensions: html()})
+	let {driver, state: end, colored} = await typeWhileParsing(state, 654, 400, 2000)
+	expect(colored).toBeGreaterThanOrEqual(0)
+	expect(driver.progress.treeLen).toBeGreaterThan(end.doc.line(674).to)
+	let ref = freshRuns(end, 600, 700)
+	for (let n = 640; n <= 670; n++) expect(namedRuns(driver, n)).toBe(namedRuns(ref, n))
+}, 60000)

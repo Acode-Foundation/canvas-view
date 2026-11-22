@@ -44,9 +44,15 @@ interface Window {
 	from: number
 	to: number
 	parse: PartialParse | null
+	/// The running parse's range, in the document it reads (which edits
+	/// since it started haven't changed).
+	parseFrom: number
+	parseTo: number
+	/// Edits made since the running parse started. It finishes on its own
+	/// document, and then the window is parsed again incrementally from
+	/// its tree with these applied.
+	pending: ChangeSet | null
 	tree: Tree | null
-	/// While parsing again after edits: the previous tree's fragments.
-	fragments: readonly TreeFragment[]
 	used: number
 }
 
@@ -96,6 +102,10 @@ export class SyntaxDriver {
 	private treeSource = 1
 	private fragments: readonly TreeFragment[] = []
 	private parse: PartialParse | null = null
+	/// Edits made since a running mixed-language parse started (see
+	/// `workMixed`): it finishes on the document it started on, and then
+	/// catches up with these.
+	private parsePending: ChangeSet | null = null
 	private windows = new Map<number, Window>()
 	private lines = new Map<number, CachedLine>()
 	private classIds = new Map<string, number>()
@@ -137,6 +147,7 @@ export class SyntaxDriver {
 		this.treeSource = this.nextSource++
 		this.fragments = []
 		this.parse = null
+		this.parsePending = null
 		this.windows.clear()
 		this.lines.clear()
 		this.version++
@@ -203,15 +214,22 @@ export class SyntaxDriver {
 		let ranges: {fromA: number, toA: number, fromB: number, toB: number}[] = []
 		changes.iterChangedRanges((fromA, toA, fromB, toB) => ranges.push({fromA, toA, fromB, toB}))
 		let firstChange = ranges[0].fromA
-		if (this.parse) this.takeTree()
+		// A mixed-language parse can't stop where it is (see `workMixed`):
+		// while it's still working toward the visible text, it keeps going
+		// on the document it started on. Past it (the look-ahead), it's
+		// dropped, as parsing the edit again from the tree that covers the
+		// screen is quick.
+		if (this.parse && this.mixed && (this.parsePending || this.treeLen < Math.min(this.visibleTo, oldDoc.length)))
+			this.parsePending = this.parsePending ? this.parsePending.compose(changes) : changes
+		else if (this.parse) this.takeTree()
 		let prevTree = this.tree, prevSource = this.treeSource, prevLen = this.treeLen
 		this.fragments = TreeFragment.applyChanges(TreeFragment.addTree(this.tree, this.fragments, true), ranges)
 		// The old tree stays valid (and keeps its source id) for the
 		// unchanged prefix, so lines above the edit keep their colors.
 		this.treeLen = Math.min(this.treeLen, firstChange)
-		this.parse = null
+		if (!this.parsePending) this.parse = null
 		let lastChange = ranges[ranges.length - 1].toA, delta = changes.newLength - changes.length
-		let {edited, shifted} = this.mapWindows(ranges, oldDoc.lines == this.doc.lines, delta)
+		let {edited, shifted} = this.mapWindows(changes, ranges, oldDoc.lines == this.doc.lines, delta)
 		let sources = new Set([prevSource, ...edited.map(e => e.source)])
 		let near = this.mapLines(changes, firstChange, lastChange, sources, shifted)
 		if (this.parser) {
@@ -242,12 +260,16 @@ export class SyntaxDriver {
 
 	/// Map window parses through an edit. Without changes to the line
 	/// count (windows are keyed by line), parsed windows after it are
-	/// shifted, and the one(s) around it (or still parsing after it) are
-	/// parsed again incrementally, from their own trees' fragments: typing
-	/// faster than a slow device parses a window must not restart it from
-	/// scratch. Otherwise every window from the edit on is dropped.
-	/// Returns the windows to parse and the sources of the shifted ones.
-	private mapWindows(ranges: readonly {fromA: number, toA: number, fromB: number, toB: number}[], sameLines: boolean, delta: number) {
+	/// shifted, and the one around it is parsed again incrementally, from
+	/// its own tree's fragments. A window still parsing keeps parsing the
+	/// document it started on and catches up with the edits once done
+	/// (`workWindow`): restarting it on every keystroke never finished
+	/// while the user typed faster than a slow device parses a window, so
+	/// the screen stayed without colors for as long as they typed. Other
+	/// line count changes drop every window from the edit on. Returns the
+	/// windows to parse and the sources of the shifted ones.
+	private mapWindows(changes: ChangeSet, ranges: readonly {fromA: number, toA: number, fromB: number, toB: number}[],
+					   sameLines: boolean, delta: number) {
 		let first = ranges[0].fromA, last = ranges[ranges.length - 1].toA
 		let edited: {window: Window, tree: Tree | null, source: number}[] = [], shifted = new Set<number>()
 		for (let [k, w] of this.windows) {
@@ -255,24 +277,31 @@ export class SyntaxDriver {
 			let after = w.from > last
 			if (!sameLines || !after && (w.from > first || w.to < last)) {
 				this.windows.delete(k)
-			} else if (after && w.tree) {
-				w.from += delta
-				w.to += delta
+				continue
+			}
+			if (after) w.from += delta
+			w.to += delta
+			if (w.parse) {
+				w.pending = w.pending ? w.pending.compose(changes) : changes
+				edited.push({window: w, tree: null, source: w.source})
+			} else if (after) {
 				shifted.add(w.source)
 			} else {
-				// An unfinished parse restarts from the fragments it started
-				// from (finishing its partial tree costs more than it saves).
-				let fragments = w.tree ? [new TreeFragment(w.from, w.to, w.tree, -w.from)] : w.fragments
-				w.fragments = TreeFragment.applyChanges(fragments, ranges)
+				let fragments = TreeFragment.applyChanges([new TreeFragment(w.from, w.to - delta, w.tree!, -w.from)], ranges)
 				edited.push({window: w, tree: w.tree, source: w.source})
-				if (after) w.from += delta
-				w.to += delta
 				w.tree = null
 				w.source = -1 - this.nextSource++
-				w.parse = this.parser!.startParse(new DocInput(this.doc), w.fragments, [{from: w.from, to: w.to}])
+				this.startWindowParse(w, fragments)
 			}
 		}
 		return {edited, shifted}
+	}
+
+	private startWindowParse(w: Window, fragments: readonly TreeFragment[]) {
+		w.parseFrom = w.from
+		w.parseTo = w.to
+		w.pending = null
+		w.parse = this.parser!.startParse(new DocInput(this.doc), fragments, [{from: w.from, to: w.to}])
 	}
 
 	/// Map cached lines through an edit. Lines after it become stale, and
@@ -407,6 +436,7 @@ export class SyntaxDriver {
 		let {tree, len} = found
 		if (len < Math.min(this.visibleTo, this.doc.length) || len <= this.treeLen) return false
 		this.parse = null
+		this.parsePending = null
 		this.fragments = TreeFragment.addTree(tree, [], len < this.doc.length)
 		this.publish(tree, len)
 		return true
@@ -452,6 +482,13 @@ export class SyntaxDriver {
 	/// way. Instead the parse is stopped at a target and run to the end:
 	/// first just past the visible text, then to the full look-ahead.
 	/// Each restart reuses the previous tree as fragments.
+	///
+	/// An edit doesn't restart a running parse either: it finishes on the
+	/// document it started on, and then its tree, with the edits since
+	/// applied, is parsed again incrementally, which reuses all of it but
+	/// around them. Restarting it on every keystroke never finished while
+	/// the user typed faster than a slow device parses, so the screen had
+	/// no colors for as long as they typed.
 	private workMixed(end: number, target: number): boolean {
 		let stage = this.treeLen < this.visibleTo ? Math.min(target, this.visibleTo + MIXED_STAGE_AHEAD) : target
 		if (!this.parse) {
@@ -459,9 +496,20 @@ export class SyntaxDriver {
 			this.parse = this.parser!.startParse(new DocInput(this.doc), this.fragments)
 		}
 		let parse = this.parse
-		if (stage < this.doc.length && (parse.stoppedAt == null || parse.stoppedAt > stage)) parse.stopAt(stage)
+		// A parse of an older document keeps its own stop position.
+		if (!this.parsePending && stage < this.doc.length && (parse.stoppedAt == null || parse.stoppedAt > stage)) parse.stopAt(stage)
 		for (;;) {
 			let done = parse.advance()
+			if (done && this.parsePending) {
+				let pending = this.parsePending, ranges: {fromA: number, toA: number, fromB: number, toB: number}[] = []
+				pending.iterChangedRanges((fromA, toA, fromB, toB) => ranges.push({fromA, toA, fromB, toB}))
+				let len = Math.min(parse.stoppedAt ?? pending.length, pending.length)
+				this.fragments = TreeFragment.applyChanges(TreeFragment.addTree(done, [], len < pending.length), ranges)
+				this.parsePending = null
+				parse = this.parse = this.parser!.startParse(new DocInput(this.doc), this.fragments)
+				if (stage < this.doc.length) parse.stopAt(stage)
+				continue
+			}
 			if (done) {
 				let len = Math.min(parse.stoppedAt ?? this.doc.length, this.doc.length)
 				this.parse = null
@@ -481,6 +529,7 @@ export class SyntaxDriver {
 			// No partial tree to take (see workMixed); the fragments keep
 			// what earlier stages parsed.
 			this.parse = null
+			this.parsePending = null
 			return
 		}
 		let pos = parse.parsedPos
@@ -543,8 +592,9 @@ export class SyntaxDriver {
 				let firstLine = Math.max(1, index * WINDOW_LINES + 1 - WINDOW_LEAD)
 				let lastLine = Math.min(this.doc.lines, (index + 1) * WINDOW_LINES)
 				let from = this.doc.line(firstLine).from, to = this.doc.line(lastLine).to
-				w = {index, source: -1 - this.nextSource++, from, to, parse: null, tree: null, fragments: [], used: ++this.useCounter}
-				w.parse = this.parser!.startParse(new DocInput(this.doc), [], [{from, to}])
+				w = {index, source: -1 - this.nextSource++, from, to, parse: null, parseFrom: from, parseTo: to, pending: null,
+					 tree: null, used: ++this.useCounter}
+				this.startWindowParse(w, [])
 				this.evictWindows()
 				this.windows.set(index, w)
 			}
@@ -560,10 +610,15 @@ export class SyntaxDriver {
 	private workWindow(w: Window, end: number) {
 		while (w.parse) {
 			let done = w.parse.advance()
-			if (done) {
+			if (done && w.pending) {
+				// Parsed a document edited since: parse the window again
+				// with the edits, reusing all of this tree but around them.
+				let ranges: {fromA: number, toA: number, fromB: number, toB: number}[] = []
+				w.pending.iterChangedRanges((fromA, toA, fromB, toB) => ranges.push({fromA, toA, fromB, toB}))
+				this.startWindowParse(w, TreeFragment.applyChanges([new TreeFragment(w.parseFrom, w.parseTo, done, -w.parseFrom)], ranges))
+			} else if (done) {
 				w.tree = done
 				w.parse = null
-				w.fragments = []
 				this.noteChanged(w.from, w.to)
 				return true
 			}

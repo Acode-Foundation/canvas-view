@@ -227,7 +227,12 @@ export class SyntaxDriver {
 			this.parsePending = this.parsePending ? this.parsePending.compose(changes) : changes
 		else if (this.parse) this.takeTree()
 		let prevTree = this.tree, prevSource = this.treeSource, prevLen = this.treeLen
-		this.fragments = TreeFragment.applyChanges(TreeFragment.addTree(this.tree, this.fragments, true), ranges)
+		// The tree is added as a fragment only while it's the previous
+		// document's: one from before an earlier edit is in the fragments
+		// already, mapped through it (adding it again would reuse its nodes
+		// at their old positions).
+		let base = this.treeDoc === oldDoc ? TreeFragment.addTree(this.tree, this.fragments, true) : this.fragments
+		this.fragments = TreeFragment.applyChanges(base, ranges)
 		// The old tree stays valid (and keeps its source id) for the
 		// unchanged prefix, so lines above the edit keep their colors.
 		this.treeLen = Math.min(this.treeLen, firstChange)

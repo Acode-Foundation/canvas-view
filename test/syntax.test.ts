@@ -316,3 +316,28 @@ test("a mixed-language parse interrupted by every keystroke still reaches the sc
 	let ref = freshRuns(end, 600, 700)
 	for (let n = 640; n <= 670; n++) expect(namedRuns(driver, n)).toBe(namedRuns(ref, n))
 }, 60000)
+
+// Two edits with no new canonical tree between them (the screen is far
+// beyond it, so edits don't parse): the tree from before the first edit
+// must not be reused as if it were the second's.
+test("edits between canonical trees keep the parse's reuse in place", async () => {
+	let {makeFixture} = await import("../demo/fixtures")
+	let state = EditorState.create({doc: makeFixture("js", 6000), extensions: javascript()})
+	let queue: (() => void)[] = []
+	let driver = new SyntaxDriver(state, classHighlighter, () => {}, cb => queue.push(cb))
+	let far = state.doc.line(5000)
+	driver.setVisible(far.from, state.doc.line(5040).to)
+	expect(driver.progress.treeLen).toBeLessThan(far.from - 30_000)
+	for (let i = 0; i < 4; i++) {
+		let at = state.doc.line(10 + i * 7).from
+		let tr = state.update({changes: {from: at, insert: i % 2 ? "/* x */" : "\n\n"}})
+		state = tr.state
+		driver.update(state, tr.changes)
+	}
+	driver.budget = () => 1e9
+	driver.setVisible(0, state.doc.length)
+	for (let i = 0; i < 1000 && queue.length; i++) queue.shift()!()
+	expect(driver.progress.treeLen).toBe(state.doc.length)
+	let ref = freshRuns(state, 1, state.doc.lines)
+	for (let n = 1; n <= state.doc.lines; n += 3) expect(namedRuns(driver, n)).toBe(namedRuns(ref, n))
+})

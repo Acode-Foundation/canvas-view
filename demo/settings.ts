@@ -124,7 +124,8 @@ export const sections: Section[] = [
 		{key: "magnifier", label: "Magnifier", def: "1", choices: onOff}
 	]},
 	{title: "Rendering", settings: [
-		{key: "backend", label: "GPU backend", def: "webgl2", choices: [["webgl2", "WebGL2"], ["webgpu", "WebGPU"]]}
+		{key: "backend", label: "GPU backend", def: "webgl2", choices: [["webgl2", "WebGL2"], ["webgpu", "WebGPU"]]},
+		{key: "worker", label: "Syntax parsing", def: "0", choices: [["0", "Main thread"], ["1", "Worker (screen on the main thread)"]]}
 	]}
 ]
 

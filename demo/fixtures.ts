@@ -98,9 +98,19 @@ const deepBlock = (i: number) => {
 	return out.join("\n") + "\n\n"
 }
 
-export type FixtureKind = "js" | "html" | "unicode" | "longline" | "rtl" | "deep"
+export type FixtureKind = "js" | "html" | "unicode" | "longline" | "rtl" | "deep" | "styled"
 
 export function makeFixture(kind: FixtureKind, lines: number): string {
+	// Long lines of paragraphs with style attributes, each a nested CSS
+	// parse (the shape of an exported document, Acode#3008).
+	if (kind == "styled") {
+		let out = ["<!doctype html>", "<html><body>"]
+		for (let i = 2; i < lines - 1; i++) out.push(i % 3 == 1
+			? `<p class="c${i}" style="margin-bottom: 0; font-style: normal; font-weight: normal">&nbsp;</p>`
+			: `<p class="c${i}" style="margin-bottom: 0; font-style: normal"><span style="font-family: Segoe UI, sans-serif">If you mean scruffy-looking, then yes. ${i}</span></p>`)
+		out.push("</body></html>")
+		return out.join("\n")
+	}
 	if (kind == "longline") {
 		let parts: string[] = []
 		for (let i = 0; i < lines; i++)

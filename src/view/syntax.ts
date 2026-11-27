@@ -2,6 +2,7 @@ import {DocInput, Language, language} from "@codemirror/language"
 import {type ChangeSet, type EditorState, MapMode, type Text} from "@codemirror/state"
 import {NodeProp, type NodeType, type Parser, type PartialParse, Tree, TreeFragment} from "@lezer/common"
 import {getStyleTags, highlightTree, type Highlighter} from "@lezer/highlight"
+import {type RemoteDoc, syntaxWorkerFacet, type WorkerClient} from "./syntaxworker"
 
 /// Style runs for one line: flat triples of (from, to, classId), with
 /// offsets relative to the line start.
@@ -102,6 +103,10 @@ export class SyntaxDriver {
 	/// The document the canonical tree was parsed for, and a counter
 	/// bumped on every publish.
 	private treeDoc: Text | null = null
+	/// How far the canonical tree was parsed for `treeDoc`, and the
+	/// changes from `treeDoc` to the current document.
+	private treeDocLen = 0
+	private sinceTree: ChangeSet | null = null
 	private published = 0
 	private treeSource = 1
 	private fragments: readonly TreeFragment[] = []
@@ -125,6 +130,16 @@ export class SyntaxDriver {
 	private visibleTo = 0
 	private scheduled = false
 	private destroyed = false
+	/// The syntax worker (`syntaxWorker`), the document it parses, and
+	/// whether it failed for this document. While it parses the document,
+	/// the main thread parses only visible text its trees don't cover yet
+	/// (`workVisible`, edits, `screenTarget`) and window parses; it takes
+	/// the worker's trees as they come.
+	private worker: WorkerClient | null = null
+	private remote: RemoteDoc | null = null
+	private remoteFailed = false
+	/// Whether the worker sent a tree for this document yet.
+	private remoteStarted = false
 	/// Time budget per slice in ms; lower while the user is scrolling.
 	budget = () => 8
 	/// Whether the user is scrolling or typing: then only what's near the
@@ -138,7 +153,11 @@ export class SyntaxDriver {
 	}
 
 	private reset(state: EditorState) {
+		this.closeRemote()
+		this.worker = state.facet(syntaxWorkerFacet)
+		this.remoteFailed = false
 		this.parser = state.facet(language)?.parser ?? null
+		this.langName = state.facet(language)?.name ?? ""
 		// LR parsers configured with `wrap` (parseMixed) embed other languages.
 		this.mixed = !!(this.parser as {wrappers?: readonly unknown[]} | null)?.wrappers?.length
 		this.doc = state.doc
@@ -148,6 +167,9 @@ export class SyntaxDriver {
 		this.visibleFrom = Math.min(this.visibleFrom, this.visibleTo)
 		this.tree = Tree.empty
 		this.treeLen = 0
+		this.treeDoc = null
+		this.treeDocLen = 0
+		this.sinceTree = null
 		this.treeSource = this.nextSource++
 		this.fragments = []
 		this.parse = null
@@ -207,10 +229,18 @@ export class SyntaxDriver {
 	/// parses are used.
 	private get windowGap() { return this.mixed ? MIXED_WINDOW_GAP : WINDOW_GAP }
 	private mixed = false
+	private langName = ""
 
 	update(state: EditorState, changes: ChangeSet | null) {
 		let parser = state.facet(language)?.parser ?? null
 		if (parser != this.parser) return this.reset(state)
+		let worker = state.facet(syntaxWorkerFacet)
+		if (worker != this.worker) {
+			this.closeRemote()
+			this.worker = worker
+			this.remoteFailed = false
+			this.kick()
+		}
 		if (!changes || changes.empty) return
 		this.editing = true
 		let oldDoc = this.doc
@@ -261,6 +291,8 @@ export class SyntaxDriver {
 			for (let {window: w, tree, source} of edited) if (this.workWindow(w, end) && tree && w.from <= firstChange)
 				this.keepReused(near, source, tree, w.to - delta, w.tree!, w.source, w.to, w.from, delta)
 		}
+		if (this.treeDoc && this.treeDoc !== this.doc) this.sinceTree = this.sinceTree ? this.sinceTree.compose(changes) : changes
+		this.remote?.edit(changes, this.doc)
 		this.version++
 		this.noteChanged(ranges[0].fromB, this.doc.length)
 		this.editing = false
@@ -363,6 +395,7 @@ export class SyntaxDriver {
 		if (from == this.visibleFrom && to == this.visibleTo) return
 		this.visibleFrom = from
 		this.visibleTo = to
+		this.remote?.visible(to)
 		this.kick()
 	}
 
@@ -382,12 +415,15 @@ export class SyntaxDriver {
 		let budget = !scrolling && this.treeLen < Math.min(this.visibleTo, this.doc.length) ? Math.max(this.budget(), URGENT_BUDGET) : this.budget()
 		let end = performance.now() + budget
 		let changed = false
+		if (!this.remote && this.worker && !this.remoteFailed && !this.worker.dead && this.treeLen < this.doc.length) this.openRemote()
 		// 1. Visible area far beyond the canonical parse: window parses.
 		if (this.visibleFrom > this.treeLen + this.windowGap) changed = this.workWindows(end) || changed
 		// 2. The canonical parse, up to the viewport plus look-ahead (just
-		// past the screen while scrolling).
+		// past the screen while scrolling). With the worker, only while its
+		// trees don't cover the visible text (it's starting, or the screen
+		// moved past them): the rest of the document is its job.
 		if (performance.now() < end) {
-			let target = Math.min(this.doc.length, this.visibleTo + (scrolling ? SCROLL_AHEAD : PARSE_AHEAD))
+			let target = this.remote ? this.screenTarget() : Math.min(this.doc.length, this.visibleTo + (scrolling ? SCROLL_AHEAD : PARSE_AHEAD))
 			if (this.treeLen < target) changed = this.workCanonical(end, target) || changed
 		}
 		if (changed) {
@@ -416,7 +452,62 @@ export class SyntaxDriver {
 	private urgent() {
 		let target = Math.min(this.doc.length, this.visibleTo + SCROLL_AHEAD)
 		if (this.visibleFrom > this.treeLen + this.windowGap) return this.windowsNeeded().some(i => !this.windows.get(i)?.tree)
-		return this.treeLen < target
+		return this.treeLen < (this.remote ? this.screenTarget() : target)
+	}
+
+	/// Have the worker parse the document, starting from the tree parsed
+	/// so far (valid for `treeDoc`, which `sinceTree` maps to the
+	/// document).
+	private openRemote() {
+		let seed = this.treeDoc && this.treeDocLen ? {tree: this.tree, len: this.treeDocLen, doc: this.treeDoc} : null
+		let remote: RemoteDoc | null = null
+		this.remoteStarted = false
+		remote = this.worker!.open({
+			parser: this.parser!,
+			lang: this.langName,
+			doc: this.doc,
+			visible: this.visibleTo,
+			seed,
+			since: seed && this.treeDoc !== this.doc ? this.sinceTree : null,
+			onTree: (tree, len, doc, since) => {
+				if (this.remote != remote) return
+				this.remoteStarted = true
+				this.remoteTree(tree, len, doc, since)
+			},
+			onFail: () => {
+				if (this.remote != remote) return
+				this.remote = null
+				this.remoteFailed = true
+				this.kick()
+			}
+		})
+		// It can fail right away (the worker couldn't be created).
+		if (!this.remoteFailed) this.remote = remote
+		if (!remote) this.remoteFailed = true
+	}
+
+	private closeRemote() {
+		let remote = this.remote
+		this.remote = null
+		remote?.close()
+	}
+
+	/// A tree from the worker, parsed up to `len` for `doc`, which
+	/// `since` maps to the current document. Taken when it covers more
+	/// than the tree there is (up to the first change since).
+	private remoteTree(tree: Tree, len: number, doc: Text, since: ChangeSet | null) {
+		if (this.destroyed || !this.parser) return
+		let ranges = since ? changedRanges(since) : []
+		let valid = ranges.length ? Math.min(len, ranges[0].fromA) : len
+		if (valid <= this.treeLen) return
+		this.parse = null
+		this.parsePending = null
+		let fragments = TreeFragment.addTree(tree, [], len < doc.length)
+		this.fragments = ranges.length ? TreeFragment.applyChanges(fragments, ranges) : fragments
+		this.publish(tree, valid, doc, len, ranges.length ? since : null)
+		this.version++
+		this.onUpdate()
+		this.kick()
 	}
 
 	private kickAfterFrame() {
@@ -431,8 +522,22 @@ export class SyntaxDriver {
 		setTimeout(this.run, ms)
 	}
 
+	/// With the worker: how far the main thread parses (the visible text
+	/// and a bit past it, when the canonical tree doesn't cover it), or 0.
+	/// Until the worker's first tree comes (it's loading, and splitting the
+	/// text), a bit past the screen as without it, so a fling right after
+	/// opening a file doesn't outrun the parse: a parse chasing the screen
+	/// publishes a tree every slice and gains little. Not for mixed
+	/// languages, whose parse here couldn't keep up with a fling anyway,
+	/// and is dropped when the worker's tree comes.
+	private screenTarget() {
+		let ahead = Math.min(this.doc.length, this.visibleTo + SCROLL_AHEAD)
+		if (!this.remoteStarted && !this.mixed) return ahead
+		return this.treeLen < Math.min(this.visibleTo, this.doc.length) ? ahead : 0
+	}
+
 	private needsWork() {
-		let target = Math.min(this.doc.length, this.visibleTo + PARSE_AHEAD)
+		let target = this.remote ? this.screenTarget() : Math.min(this.doc.length, this.visibleTo + PARSE_AHEAD)
 		if (this.treeLen < target) return true
 		return this.visibleFrom > this.treeLen + this.windowGap && this.windowsNeeded().some(i => !this.windows.get(i)?.tree)
 	}
@@ -554,12 +659,14 @@ export class SyntaxDriver {
 	/// Install a new canonical tree. Highlighting well before the old
 	/// tree's end can't change, so cached runs there are carried over to
 	/// the new tree and only the frontier is reported as changed.
-	private publish(tree: Tree, len: number) {
+	private publish(tree: Tree, len: number, doc = this.doc, docLen = len, since: ChangeSet | null = null) {
 		let oldSource = this.treeSource
 		let stable = Math.max(0, Math.min(this.treeLen, len) - STABLE_MARGIN)
 		this.tree = tree
 		this.treeLen = len
-		this.treeDoc = this.doc
+		this.treeDoc = doc
+		this.treeDocLen = docLen
+		this.sinceTree = since
 		this.published++
 		this.treeSource = this.nextSource++
 		for (let e of this.lines.values())
@@ -745,17 +852,25 @@ export class SyntaxDriver {
 
 	/// Parse state for diagnostics and benchmarks.
 	get progress() {
-		return {treeLen: this.treeLen, docLength: this.doc.length, windows: this.windows.size, parsing: !!this.parse}
+		return {treeLen: this.treeLen, docLength: this.doc.length, windows: this.windows.size, parsing: !!this.parse,
+				worker: !!this.remote}
 	}
 
 	destroy() {
 		this.destroyed = true
+		this.closeRemote()
 		if (this.parser && this.treeDoc === this.doc && this.treeLen) {
 			let kept = treeCache.get(this.doc)
 			if (!kept || kept.parser != this.parser || kept.len < this.treeLen)
 				treeCache.set(this.doc, {parser: this.parser, tree: this.tree, len: this.treeLen})
 		}
 	}
+}
+
+function changedRanges(changes: ChangeSet) {
+	let ranges: {fromA: number, toA: number, fromB: number, toB: number}[] = []
+	changes.iterChangedRanges((fromA, toA, fromB, toB) => ranges.push({fromA, toA, fromB, toB}))
+	return ranges
 }
 
 function current(cached: CachedLine | undefined, line: {from: number, text: string}, source: number) {

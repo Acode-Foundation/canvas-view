@@ -61,7 +61,10 @@ tests.
 ```
 src/
   index.ts         public exports
+  worker.ts        serveSyntax: the syntax worker's runtime (the ./worker entry)
   core/            DOM-free and worker-safe. Never import from view/ here.
+    treecodec.ts   syntax trees as exact structural copies between threads
+    syntaxprotocol.ts  syntax worker messages, TextInput
     color.ts       CSS color → packed 0xAABBGGRR
     metrics.ts     font measurement → cell and line sizes
     atlas.ts       glyph atlas: per-font-variant coverage masks, shelf packing
@@ -77,6 +80,7 @@ src/
     layout.ts      line clusters: graphemes, tabs, control chars, shaped runs
     bidi.ts        Unicode Bidi Algorithm, run reordering, visual cursor motion
     syntax.ts      time-sliced Lezer parsing and highlight runs
+    syntaxworker.ts  syntaxWorker: main-thread client, watchdog, fallback
     highlight.ts   token colors from the state's highlighters and their CSS
     cssresolve.ts  CSS cascade over style modules for virtual elements (no DOM)
     csstheme.ts    theme colors, token, mark and gutter class styles from that cascade
@@ -222,6 +226,24 @@ its own tree with the state, so `syntaxTree(state)` users see the whole
 parse. Lines whose syntax subtrees were reused keep their highlighting
 across edits. Requires `@lezer/common` ≥ 1.5.4; keep a single copy of it
 installed.
+
+**Worker parsing** (`syntaxWorker(() => new Worker(...))`, opt-in; the
+worker file calls `serveSyntax(languages)` from
+`@acode.app/canvas-view/worker`). The worker parses the whole document
+(edits as `ChangeSet` JSON, a stopped stage just past the screen first);
+the main thread keeps parsing only visible text the worker's trees don't
+cover, and window parses. Trees come back as exact structural copies
+(`core/treecodec.ts`): node types by node set fingerprint, look-ahead,
+context-hash and stopped-mixed-parse props, buffers packed in one
+transferred array, mounted trees with the main thread's own nested
+parsers (found by calling the `parseMixed` wrappers' `nest` on the
+node, so incremental reparses reuse them), and everything the main
+thread already has by reference (kept while the worker's fragments may
+reuse it). Every failure falls back to main-thread parsing: the worker
+can't be created or doesn't load, reports an error, is silent for 10s
+while it owes a tree, speaks another protocol, sends a tree that
+doesn't decode, or lacks the language or has it configured differently
+(`parserFingerprint`).
 
 ### CodeMirror compatibility
 

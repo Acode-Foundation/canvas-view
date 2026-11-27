@@ -11,7 +11,7 @@ import {crosshairCursor, Decoration, type DecorationSet, dropCursor, EditorView,
 	hoverTooltip, keymap, lineNumberMarkers, MatchDecorator, rectangularSelection, ViewPlugin, type ViewUpdate,
 	WidgetType} from "@codemirror/view"
 import {getCM, vim, Vim} from "@replit/codemirror-vim"
-import {CanvasView, completeWords, darkTheme, lightTheme, wordIndex} from "../src/index"
+import {CanvasView, completeWords, darkTheme, lightTheme, syntaxWorker, wordIndex} from "../src/index"
 import {type FixtureKind, makeFixture} from "./fixtures"
 import {fontFamily, guideOption, ligatureOption, mountSettings, readOnlyCompartment, setting, stickyOption, whitespaceOption} from "./settings"
 
@@ -279,6 +279,13 @@ let full: Extension = ext == "full" ? [
 	keymap.of([...completionKeymap, ...searchKeymap, ...foldKeymap, ...lintKeymap])
 ] : []
 
+function createSyntaxWorker() {
+	// `?worker=missing` tries a worker that doesn't load, to see the
+	// fallback to main-thread parsing.
+	if (params.get("worker") == "missing") return new Worker("./missing.worker.js", {type: "module"})
+	return new Worker(new URL("./syntax.worker.ts", import.meta.url), {type: "module"})
+}
+
 let t0 = performance.now()
 let doc = kind == ("empty" as FixtureKind) ? "" : makeFixture(kind, lines)
 // Stock CodeMirror state-level extensions, unchanged.
@@ -288,7 +295,8 @@ let state = EditorState.create({doc, extensions: [
 	EditorState.tabSize.of(+get("tabSize")),
 	EditorState.allowMultipleSelections.of(true),
 	readOnlyCompartment.of(EditorState.readOnly.of(get("readOnly") == "1")),
-	kind == "html" ? html() : javascript(),
+	kind == "html" || kind == "styled" ? html() : javascript(),
+	get("worker") != "0" ? syntaxWorker(createSyntaxWorker) : [],
 	history(),
 	closeBrackets(),
 	indentOnInput(),

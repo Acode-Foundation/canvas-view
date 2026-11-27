@@ -12,15 +12,19 @@ import {nestedParser, parserFingerprint, setFingerprint, transferables, TreeDeco
 //     serveSyntax([javascriptLanguage])
 
 /// Languages a syntax worker parses: a list of languages (or anything
-/// with a `name` and a `parser`), or a function returning the parser for
-/// a language name (it may load it, returning a promise). The main thread
-/// asks by `Language.name`, and only uses the worker when its parser is
-/// configured alike (same node set, dialect, top rule and number of
-/// `parseMixed` wrappers), so register the same language configurations
-/// the editor uses.
+/// with a `name` and a `parser`), or a function returning the parsers for
+/// a language name (it may load them, returning a promise). The main
+/// thread asks by `Language.name`, and only uses the worker when one of
+/// them is configured like its own parser (same node set, dialect, top
+/// rule and number of `parseMixed` wrappers): the worker picks that one.
+/// A name can stand for several configurations (`@codemirror/lang-javascript`'s
+/// JSX dialect is named "javascript" too), so give all of those the editor
+/// uses. Parsers mounted by `parseMixed` need a `nodeSet` property (LR and
+/// Markdown parsers have one); a document whose trees mount one without
+/// it is parsed on the main thread.
 export type SyntaxLanguages =
 	| readonly {readonly name: string, readonly parser: Parser}[]
-	| ((name: string) => Parser | null | undefined | Promise<Parser | null | undefined>)
+	| ((name: string) => Parser | readonly Parser[] | null | undefined | Promise<Parser | readonly Parser[] | null | undefined>)
 
 /// Where the worker gets messages and posts replies (the worker's global
 /// scope by default; a `MessagePort` works too).
@@ -157,9 +161,9 @@ export function serveSyntax(languages: SyntaxLanguages, scope: SyntaxWorkerScope
 		scope.postMessage(message, transfer)
 	}
 
-	let lookup = (name: string): Parser | null | undefined | Promise<Parser | null | undefined> => {
-		if (typeof languages == "function") return languages(name)
-		return languages.find(l => l.name == name)?.parser
+	let lookup = async (name: string): Promise<readonly Parser[]> => {
+		let found = typeof languages == "function" ? await languages(name) : languages.filter(l => l.name == name).map(l => l.parser)
+		return !found ? [] : Array.isArray(found) ? found : [found as Parser]
 	}
 
 	let channel = new MessageChannel()
@@ -200,13 +204,14 @@ export function serveSyntax(languages: SyntaxLanguages, scope: SyntaxWorkerScope
 	}
 
 	let open = async (m: Extract<ToWorker, {t: "open"}>) => {
-		let parser = await lookup(m.lang)
+		let parsers = await lookup(m.lang)
 		if (!opening.has(m.id)) return // Closed meanwhile.
 		let queued = opening.get(m.id)!
 		opening.delete(m.id)
-		if (!parser) return post({t: "unsupported", id: m.id, reason: `No parser for ${m.lang}`})
-		let fp = parserFingerprint(parser)
-		if (fp != m.fp) return post({t: "unsupported", id: m.id, reason: `${m.lang} is configured differently (${fp}, not ${m.fp})`})
+		if (!parsers.length) return post({t: "unsupported", id: m.id, reason: `No parser for ${m.lang}`})
+		let parser = parsers.find(p => parserFingerprint(p) == m.fp)
+		if (!parser) return post({t: "unsupported", id: m.id,
+			reason: `${m.lang} is configured differently (${parsers.map(parserFingerprint).join(", ")}, not ${m.fp})`})
 		let doc = Text.of(m.text.split("\n"))
 		let d = new WorkerDoc(m.id, parser, doc, m.version, m.visible)
 		d.touched = ++touch

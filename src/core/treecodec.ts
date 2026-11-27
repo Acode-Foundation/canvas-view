@@ -243,7 +243,7 @@ export class TreeEncoder {
 			return
 		}
 		let inner = (mount.parser as {nodeSet?: NodeSet}).nodeSet
-		if (!inner) throw new Error("Mounted tree from a parser without a node set")
+		if (!inner) throw new Error("A tree is mounted by a parser without a nodeSet property, so it can't be copied")
 		d.push(1, this.setIndex(inner), mount.bracketed ? 1 : 0, mount.overlay ? mount.overlay.length : -1)
 		if (mount.overlay) for (let r of mount.overlay) d.push(r.from, r.to)
 		let lengthAt = d.length

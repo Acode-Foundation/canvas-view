@@ -230,6 +230,9 @@ export class SyntaxDriver {
 	private get windowGap() { return this.mixed ? MIXED_WINDOW_GAP : WINDOW_GAP }
 	private mixed = false
 	private langName = ""
+	/// Whether the worker's trees for this parser can be copied here: they
+	/// need its node set (legacy stream modes, for one, have none).
+	private get copyable() { return !!(this.parser as {nodeSet?: unknown} | null)?.nodeSet }
 
 	update(state: EditorState, changes: ChangeSet | null) {
 		let parser = state.facet(language)?.parser ?? null
@@ -415,7 +418,7 @@ export class SyntaxDriver {
 		let budget = !scrolling && this.treeLen < Math.min(this.visibleTo, this.doc.length) ? Math.max(this.budget(), URGENT_BUDGET) : this.budget()
 		let end = performance.now() + budget
 		let changed = false
-		if (!this.remote && this.worker && !this.remoteFailed && !this.worker.dead && this.treeLen < this.doc.length) this.openRemote()
+		if (!this.remote && this.worker && !this.remoteFailed && !this.worker.dead && this.treeLen < this.doc.length && this.copyable) this.openRemote()
 		// 1. Visible area far beyond the canonical parse: window parses.
 		if (this.visibleFrom > this.treeLen + this.windowGap) changed = this.workWindows(end) || changed
 		// 2. The canonical parse, up to the viewport plus look-ahead (just

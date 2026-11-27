@@ -1,8 +1,8 @@
 import {expect, test} from "bun:test"
 import {EditorState, type Extension, type Text} from "@codemirror/state"
 import {html, htmlLanguage} from "@codemirror/lang-html"
-import {javascript, javascriptLanguage} from "@codemirror/lang-javascript"
-import {LanguageSupport} from "@codemirror/language"
+import {javascript, javascriptLanguage, jsxLanguage} from "@codemirror/lang-javascript"
+import {LanguageSupport, StreamLanguage} from "@codemirror/language"
 import {parseMixed} from "@lezer/common"
 import {classHighlighter} from "@lezer/highlight"
 import {SyntaxDriver} from "../src/view/syntax"
@@ -263,4 +263,35 @@ test("a destroyed driver closes its document in the worker", async () => {
 	d.driver.destroy()
 	await tick()
 	expect(closed.length).toBe(1)
+})
+
+test("a name can stand for several configurations, and the worker picks the matching one", async () => {
+	let create = inProcess(async name => name == "javascript" ? [javascriptLanguage.parser, jsxLanguage.parser] : null)
+	let state = stateWith(js, javascript({jsx: true}), syntaxWorker(create))
+	let d = driverFor(state)
+	d.driver.setVisible(0, 1500)
+	await settle(d, () => d.driver.progress.treeLen == state.doc.length)
+	expect(d.driver.progress.worker).toBe(true)
+	expect(runs(d.driver, state)).toEqual(reference(state, javascript({jsx: true})))
+})
+
+test("languages whose trees can't be copied aren't sent to the worker", async () => {
+	let opened = 0
+	let create = inProcess(languages)
+	let spy = () => {
+		let port = create()
+		let post = port.postMessage.bind(port)
+		port.postMessage = (m: any, transfer) => {
+			if (m.t == "open") opened++
+			post(m, transfer)
+		}
+		return port
+	}
+	let shell = StreamLanguage.define({token: stream => { stream.next(); return null }})
+	let state = stateWith("echo hi\n".repeat(5000), shell, syntaxWorker(spy))
+	let d = driverFor(state)
+	d.driver.setVisible(0, 1500)
+	await settle(d, () => d.driver.progress.treeLen == state.doc.length)
+	await tick()
+	expect(opened).toBe(0)
 })

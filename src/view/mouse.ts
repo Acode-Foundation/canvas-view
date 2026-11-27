@@ -321,7 +321,8 @@ export class TextDragDrop {
 
 	private dropText(e: DragEvent, text: string, direct: boolean) {
 		let host = this.host, state = host.state
-		text = clipboardFilter(state, "input", text).replace(/\r\n?/g, "\n")
+		text = clipboardFilter(state, "input", text)
+		text = text.includes("\r") ? text.replace(/\r\n?/g, "\n") : text
 		if (!text) return
 		let pos = host.posAtClient(e.clientX, e.clientY), dragged = this.dragged
 		let del = direct && dragged && dragMovesSelection(state, e) ? {from: dragged.from, to: dragged.to} : null

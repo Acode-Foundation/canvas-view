@@ -498,7 +498,8 @@ export class TouchSelection {
 			}
 			// Like a mouse drag within CodeMirror, whose text goes through
 			// the output filter (drag start) and the input one (drop).
-			let text = clipboardFilter(state, "input", clipboardFilter(state, "output", state.sliceDoc(from, to))).replace(/\r\n?/g, "\n")
+			let text = clipboardFilter(state, "input", clipboardFilter(state, "output", state.sliceDoc(from, to)))
+			if (text.includes("\r")) text = text.replace(/\r\n?/g, "\n")
 			if (!text) return
 			let changes = state.changes([{from, to}, {from: pos, insert: text}])
 			this.host.dispatch({
